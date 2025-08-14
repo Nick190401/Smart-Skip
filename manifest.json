@@ -1,0 +1,91 @@
+{
+  "manifest_version": 3,
+  "name": "Smart Skip",
+  "version": "1.0.0",
+  "description": "Automatically clicks Skip Intro, Skip Recap, Skip Credits, Skip Ads, and Next Episode buttons on streaming platforms",
+  
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "smart-skip@extension.local"
+    }
+  },
+  
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  
+  "host_permissions": [
+    "*://*.netflix.com/*",
+    "*://*.disneyplus.com/*",
+    "*://*.amazon.com/*",
+    "*://*.primevideo.com/*",
+    "*://*.youtube.com/*",
+    "*://*.crunchyroll.com/*",
+    "*://*.hulu.com/*",
+    "*://*.apple.com/*",
+    "*://*.tv.apple.com/*",
+    "*://*.hbomax.com/*",
+    "*://*.max.com/*",
+    "*://*.paramountplus.com/*",
+    "*://*.peacocktv.com/*",
+    "*://*.funimation.com/*",
+    "*://*.wakanim.tv/*",
+    "*://*.sky.de/*",
+    "*://*.joyn.de/*",
+    "*://*.rtl.de/*",
+    "*://*.prosieben.de/*",
+    "*://*.zdf.de/*",
+    "*://*.ard.de/*",
+    "*://*.mediathek.de/*"
+  ],
+  
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.netflix.com/*",
+        "*://*.disneyplus.com/*",
+        "*://*.amazon.com/*",
+        "*://*.primevideo.com/*",
+        "*://*.youtube.com/*",
+        "*://*.crunchyroll.com/*",
+        "*://*.hulu.com/*",
+        "*://*.apple.com/*",
+        "*://*.tv.apple.com/*",
+        "*://*.hbomax.com/*",
+        "*://*.max.com/*",
+        "*://*.paramountplus.com/*",
+        "*://*.peacocktv.com/*",
+        "*://*.funimation.com/*",
+        "*://*.wakanim.tv/*",
+        "*://*.sky.de/*",
+        "*://*.joyn.de/*",
+        "*://*.rtl.de/*",
+        "*://*.prosieben.de/*",
+        "*://*.zdf.de/*",
+        "*://*.ard.de/*",
+        "*://*.mediathek.de/*"
+      ],
+      "js": [
+        "src/shared/language.js",
+        "src/content/skipper.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "Smart Skip"
+  },
+  
+  "icons": {
+    "48": "assets/icons/icon.svg",
+    "96": "assets/icons/icon.svg"
+  },
+  
+  "background": {
+    "scripts": ["src/background/background.js"]
+  }
+}
