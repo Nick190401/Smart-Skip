@@ -232,7 +232,7 @@ We welcome contributions to Smart Skip! Here's how you can help:
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under a custom License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
