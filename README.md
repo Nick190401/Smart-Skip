@@ -4,7 +4,7 @@
 
 [![Firefox Extension](https://img.shields.io/badge/Firefox-Extension-orange?logo=firefox)](https://addons.mozilla.org/firefox/)
 [![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/Nick190401/VideoPlayerSkipper)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/license-Custom-green)](LICENSE)
 
 ---
 
