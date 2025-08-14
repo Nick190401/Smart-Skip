@@ -9,6 +9,12 @@ class VideoPlayerSkipper {
     this.lastClickTime = 0;
     this.clickCooldown = 1000;
     
+    // AI-Powered Content Detection
+    this.aiDetector = null;
+    this.aiEnabled = false;
+    this.aiPredictions = new Map();
+    this.confidenceThreshold = 0.75;
+    
     // Series detection state for intelligent skipping decisions
     this.currentSeries = null;
     this.seriesCheckInterval = null;
@@ -107,6 +113,9 @@ class VideoPlayerSkipper {
     
     await this.loadSettings();
     
+    // Initialize AI Content Detection
+    await this.initAIDetection();
+    
     this.startSeriesDetection();
     
     // Popup communication channel
@@ -125,6 +134,14 @@ class VideoPlayerSkipper {
       getDetectedLanguage: () => this.detectedLanguage,
       getPatterns: () => this.buttonPatterns,
       getCurrentSeries: () => this.currentSeries,
+      // AI Debug Interface
+      ai: {
+        enable: () => this.enableAI(),
+        disable: () => this.disableAI(),
+        setConfidence: (threshold) => this.setAIConfidence(threshold),
+        getStats: () => this.aiDetector?.getStatistics(),
+        test: () => this.testAIDetection()
+      },
       instance: this
     };
     
@@ -217,6 +234,110 @@ class VideoPlayerSkipper {
       // Safe defaults if all storage methods fail
       this.isEnabled = true;
       this.verboseLogging = false;
+    }
+  }
+  
+  // === AI CONTENT DETECTION SYSTEM ===
+  // Machine learning for intelligent skip detection
+  
+  async initAIDetection() {
+    try {
+      // Check if AI detection is enabled in settings
+      this.aiEnabled = this.settings.aiDetection || false;
+      
+      if (!this.aiEnabled) {
+        this.verboseLog('🤖 AI Detection disabled in settings');
+        return;
+      }
+      
+      // Load AI detector if available
+      if (window.AIContentDetector) {
+        this.aiDetector = new window.AIContentDetector();
+        this.aiDetector.setConfidenceThreshold(this.confidenceThreshold);
+        
+        // Listen for AI predictions
+        window.addEventListener('message', (event) => {
+          if (event.data.type === 'ai-prediction') {
+            this.handleAIPrediction(event.data.prediction, event.data.timestamp);
+          }
+        });
+        
+        this.log('🤖 AI Content Detection initialized');
+      } else {
+        this.verboseLog('🤖 AI Content Detector not available');
+      }
+    } catch (error) {
+      console.warn('AI Detection initialization failed:', error);
+    }
+  }
+  
+  handleAIPrediction(prediction, timestamp) {
+    this.verboseLog(`🤖 AI Prediction: ${prediction.type} (${Math.round(prediction.confidence * 100)}% confidence)`);
+    
+    // Store prediction
+    this.aiPredictions.set(timestamp, prediction);
+    
+    // Act on high-confidence predictions
+    if (prediction.confidence >= this.confidenceThreshold && prediction.suggestedAction === 'skip') {
+      const seriesSettings = this.getCurrentSeriesSettings();
+      
+      // Check if user wants to skip this type of content
+      let shouldSkip = false;
+      switch (prediction.type) {
+        case 'intro':
+          shouldSkip = seriesSettings.skipIntro;
+          break;
+        case 'recap':
+          shouldSkip = seriesSettings.skipRecap;
+          break;
+        case 'credits':
+          shouldSkip = seriesSettings.skipCredits;
+          break;
+        case 'ad':
+          shouldSkip = seriesSettings.skipAds;
+          break;
+      }
+      
+      if (shouldSkip) {
+        this.verboseLog(`🤖 AI suggests skipping ${prediction.type} - searching for skip button`);
+        this.scanForButtons(prediction.type);
+      } else {
+        this.verboseLog(`🤖 AI suggests skipping ${prediction.type} but user setting disabled`);
+      }
+    }
+  }
+  
+  enableAI() {
+    this.aiEnabled = true;
+    this.settings.aiDetection = true;
+    this.saveSettings();
+    this.initAIDetection();
+  }
+  
+  disableAI() {
+    this.aiEnabled = false;
+    this.settings.aiDetection = false;
+    this.saveSettings();
+    if (this.aiDetector) {
+      this.aiDetector.disable();
+    }
+  }
+  
+  setAIConfidence(threshold) {
+    this.confidenceThreshold = Math.max(0.1, Math.min(1.0, threshold));
+    if (this.aiDetector) {
+      this.aiDetector.setConfidenceThreshold(this.confidenceThreshold);
+    }
+    this.verboseLog(`🤖 AI confidence threshold set to ${Math.round(this.confidenceThreshold * 100)}%`);
+  }
+  
+  testAIDetection() {
+    if (this.aiDetector) {
+      this.verboseLog('🤖 Testing AI detection...');
+      return this.aiDetector.getStatistics();
+    } else {
+      this.verboseLog('🤖 AI detector not available');
+      return null;
     }
   }
   
@@ -1244,6 +1365,19 @@ class VideoPlayerSkipper {
           this.settings = { ...this.settings, ...request.settings };
           this.verboseLogging = this.settings.verboseLogging;
           
+          // Update AI settings
+          if (request.settings.aiDetection !== undefined) {
+            if (request.settings.aiDetection && !this.aiEnabled) {
+              this.enableAI();
+            } else if (!request.settings.aiDetection && this.aiEnabled) {
+              this.disableAI();
+            }
+          }
+          
+          if (request.settings.aiConfidence !== undefined) {
+            this.setAIConfidence(request.settings.aiConfidence);
+          }
+          
           // Update enabled status
           const domainSetting = this.settings.domains[this.domain]?.enabled;
           const newEnabled = domainSetting !== undefined ? domainSetting : this.settings.globalEnabled;
@@ -1256,6 +1390,39 @@ class VideoPlayerSkipper {
             }
           }
         }
+        sendResponse({ success: true });
+        break;
+        
+      // AI-specific actions
+      case 'getAIStats':
+        const stats = this.testAIDetection();
+        sendResponse(stats);
+        break;
+        
+      case 'testAI':
+        const testResult = this.testAIDetection();
+        sendResponse(testResult);
+        break;
+        
+      case 'resetAI':
+        if (this.aiDetector) {
+          this.aiDetector.learningData = new Map();
+          this.aiDetector.saveLearningData();
+        }
+        sendResponse({ success: true });
+        break;
+        
+      case 'updateAI':
+        if (request.enabled) {
+          this.enableAI();
+        } else {
+          this.disableAI();
+        }
+        sendResponse({ success: true });
+        break;
+        
+      case 'updateAIConfidence':
+        this.setAIConfidence(request.confidence);
         sendResponse({ success: true });
         break;
         
@@ -1336,7 +1503,7 @@ class VideoPlayerSkipper {
   // === BUTTON SCANNING AND CLICKING SYSTEM ===
   // Core functionality for finding and clicking skip buttons
   
-  scanForButtons() {
+  scanForButtons(aiSuggestedType = null) {
     if (!this.isEnabled) return;
     
     const now = Date.now();
@@ -1344,9 +1511,15 @@ class VideoPlayerSkipper {
       return;
     }
     
-    this.verboseLog('Scanning for skip buttons...');
+    this.verboseLog(`Scanning for skip buttons${aiSuggestedType ? ` (AI suggests: ${aiSuggestedType})` : ''}...`);
     
     const seriesSettings = this.getCurrentSeriesSettings();
+    
+    // Prioritize AI-suggested button type
+    if (aiSuggestedType) {
+      const found = this.scanForSpecificButtonType(aiSuggestedType, seriesSettings);
+      if (found) return;
+    }
     
     // Try platform-specific selectors first (more reliable)
     for (const selector of this.buttonPatterns.selectors) {
@@ -1379,6 +1552,89 @@ class VideoPlayerSkipper {
     if (seriesSettings.autoNext) {
       this.checkForAutoAdvancePopup();
     }
+  }
+  
+  /**
+   * Scan for specific button type (used by AI predictions)
+   */
+  scanForSpecificButtonType(buttonType, seriesSettings) {
+    if (!this.shouldSkipButtonType(buttonType, seriesSettings)) {
+      return false;
+    }
+    
+    // Create specific selectors for the button type
+    const typeSpecificSelectors = this.getSelectorsForButtonType(buttonType);
+    
+    for (const selector of typeSpecificSelectors) {
+      const buttons = document.querySelectorAll(selector);
+      for (const button of buttons) {
+        if (this.isButtonClickable(button) && 
+            this.shouldClickBasedOnTiming(button, selector)) {
+          this.clickButton(button, `AI-guided ${buttonType} detection: ${selector}`);
+          
+          // Record successful AI prediction
+          if (this.aiDetector) {
+            this.aiDetector.recordUserAction('ai_skip_success', Date.now());
+          }
+          
+          return true;
+        }
+      }
+    }
+    
+    // Fallback to text-based detection for AI-suggested type
+    const allButtons = document.querySelectorAll('button, [role="button"], a, div[onclick]');
+    
+    for (const button of allButtons) {
+      const detectedType = this.getButtonTypeFromText(button);
+      if (detectedType === buttonType && 
+          this.shouldClickButton(button) && 
+          this.shouldClickBasedOnTiming(button)) {
+        this.clickButton(button, `AI-guided ${buttonType} text match`);
+        
+        // Record successful AI prediction
+        if (this.aiDetector) {
+          this.aiDetector.recordUserAction('ai_skip_success', Date.now());
+        }
+        
+        return true;
+      }
+    }
+    
+    this.verboseLog(`🤖 AI-suggested ${buttonType} button not found`);
+    return false;
+  }
+  
+  /**
+   * Get platform-specific selectors for button types
+   */
+  getSelectorsForButtonType(buttonType) {
+    const baseSelectors = this.buttonPatterns.selectors.filter(selector => {
+      const selectorLower = selector.toLowerCase();
+      switch (buttonType) {
+        case 'intro':
+          return selectorLower.includes('intro') || selectorLower.includes('opening');
+        case 'recap':
+          return selectorLower.includes('recap') || selectorLower.includes('previously');
+        case 'credits':
+          return selectorLower.includes('credits') || selectorLower.includes('end');
+        case 'ad':
+          return selectorLower.includes('ad') || selectorLower.includes('advertisement');
+        default:
+          return false;
+      }
+    });
+    
+    // Add generic skip selectors as fallback
+    const genericSelectors = [
+      'button[data-uia*="skip"]',
+      '[data-testid*="skip"]',
+      '[aria-label*="skip" i]',
+      'button:contains("Skip")',
+      'button:contains("Überspringen")'
+    ];
+    
+    return [...baseSelectors, ...genericSelectors];
   }
   
   /**
@@ -1724,6 +1980,14 @@ class VideoPlayerSkipper {
       button.dataset.skipperClicked = Date.now().toString();
       this.lastClickTime = Date.now();
       
+      // Record manual skip for AI learning (if not AI-initiated)
+      if (this.aiDetector && !reason.includes('AI-guided')) {
+        const video = document.querySelector('video');
+        if (video) {
+          this.aiDetector.recordUserAction('manual_skip', video.currentTime);
+        }
+      }
+      
       // Pre-click mouse movement (some platforms require hover)
       const video = document.querySelector('video');
       if (video) {
@@ -1750,13 +2014,23 @@ class VideoPlayerSkipper {
       
       this.verboseLog(`Successfully clicked button: ${this.getElementText(button)}`);
       
-      // Notify background script for statistics/debugging
-      chrome.runtime.sendMessage({
+      // Enhanced notification with AI context
+      const notificationData = {
         action: 'buttonClicked',
         buttonText: this.getElementText(button),
         domain: this.domain,
-        reason: reason
-      }).catch(error => {
+        reason: reason,
+        aiInitiated: reason.includes('AI-guided'),
+        timestamp: Date.now()
+      };
+      
+      // Add AI prediction data if available
+      if (video && this.aiPredictions.has(Math.floor(video.currentTime))) {
+        notificationData.aiPrediction = this.aiPredictions.get(Math.floor(video.currentTime));
+      }
+      
+      // Notify background script for statistics/debugging
+      chrome.runtime.sendMessage(notificationData).catch(error => {
         this.verboseLog('Error notifying background script:', error);
       });
       

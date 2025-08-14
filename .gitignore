@@ -1,2 +1,6 @@
 convert_logo.html
 .vscode/settings.json
+api/test-db.php
+api/index.php
+api/.htaccess
+DATABASE_INTEGRATION_SETUP.md

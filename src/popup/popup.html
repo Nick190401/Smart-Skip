@@ -453,6 +453,162 @@
       display: none !important;
     }
     
+    /* AI Settings Styles */
+    .ai-setting-item {
+      border: 2px solid rgba(102, 126, 234, 0.3) !important;
+      background: rgba(102, 126, 234, 0.1) !important;
+    }
+    
+    .ai-setting-item:hover {
+      background: rgba(102, 126, 234, 0.15) !important;
+      border-color: rgba(102, 126, 234, 0.5) !important;
+    }
+    
+    .ai-advanced-settings {
+      margin-top: 12px;
+      padding: 16px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      border: 1px solid rgba(102, 126, 234, 0.2);
+      animation: slideDown 0.3s ease;
+    }
+    
+    .ai-confidence-item {
+      margin-bottom: 8px;
+    }
+    
+    .confidence-slider-container {
+      margin: 12px 0;
+    }
+    
+    .confidence-slider {
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.2);
+      outline: none;
+      margin: 8px 0;
+      appearance: none;
+    }
+    
+    .confidence-slider::-webkit-slider-thumb {
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+      border: 2px solid white;
+    }
+    
+    .confidence-slider::-moz-range-thumb {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      cursor: pointer;
+      border: 2px solid white;
+      box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+    }
+    
+    .confidence-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      opacity: 0.7;
+      margin-top: 4px;
+    }
+    
+    .ai-stats-container {
+      margin-top: 16px;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    .ai-stats-header {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: #fbbf24;
+    }
+    
+    .ai-stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    
+    .stat-item {
+      text-align: center;
+      padding: 8px 4px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    .stat-value {
+      display: block;
+      font-size: 16px;
+      font-weight: bold;
+      color: #667eea;
+      margin-bottom: 2px;
+    }
+    
+    .stat-label {
+      font-size: 10px;
+      opacity: 0.8;
+    }
+    
+    .ai-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    
+    .ai-btn {
+      flex: 1;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      color: #ffffff;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+    
+    .ai-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+      transform: translateY(-1px);
+    }
+    
+    .ai-btn.danger {
+      background: rgba(239, 68, 68, 0.2);
+      border-color: rgba(239, 68, 68, 0.4);
+    }
+    
+    .ai-btn.danger:hover {
+      background: rgba(239, 68, 68, 0.3);
+    }
+    
+    @keyframes slideDown {
+      from {
+        opacity: 0;
+        max-height: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        max-height: 500px;
+        transform: translateY(0);
+      }
+    }
+    
     @keyframes slideIn {
       from {
         opacity: 0;
@@ -547,6 +703,69 @@
           <option value="de" data-i18n="languageGerman">Deutsch</option>
           <option value="en" data-i18n="languageEnglish">English</option>
         </select>
+      </div>
+      
+      <!-- AI Detection Settings -->
+      <div class="setting-item ai-setting-item">
+        <div class="setting-label-wrapper">
+          <svg class="setting-icon" viewBox="0 0 24 24">
+            <path d="M12 2C13.1 2 14 2.9 14 4C14 5.1 13.1 6 12 6C10.9 6 10 5.1 10 4C10 2.9 10.9 2 12 2ZM21 9V7L15 1L9 7V9C9 10.1 9.9 11 11 11V17L12 21L13 17V11C14.1 11 15 10.1 15 9Z"/>
+          </svg>
+          <div class="setting-text">
+            <div class="setting-label">🤖 AI Content Detection</div>
+            <div class="setting-description">Intelligente Erkennung von Skip-würdigem Content</div>
+          </div>
+        </div>
+        <div class="toggle-switch" id="aiToggle">
+          <div class="toggle-slider"></div>
+        </div>
+      </div>
+      
+      <!-- AI Advanced Settings (collapsible) -->
+      <div class="ai-advanced-settings hidden" id="aiAdvancedSettings">
+        <div class="setting-item ai-confidence-item">
+          <div class="setting-label-wrapper">
+            <svg class="setting-icon" viewBox="0 0 24 24">
+              <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+            </svg>
+            <div class="setting-text">
+              <div class="setting-label">AI Confidence: <span id="confidenceValue">75%</span></div>
+              <div class="setting-description">Wie sicher muss die AI sein bevor sie agiert</div>
+            </div>
+          </div>
+        </div>
+        <div class="confidence-slider-container">
+          <input type="range" id="aiConfidenceSlider" min="10" max="95" value="75" class="confidence-slider">
+          <div class="confidence-labels">
+            <span>Aggressiv</span>
+            <span>Konservativ</span>
+          </div>
+        </div>
+        
+        <!-- AI Statistics -->
+        <div class="ai-stats-container">
+          <div class="ai-stats-header">📊 AI Statistiken</div>
+          <div class="ai-stats-grid">
+            <div class="stat-item">
+              <div class="stat-value" id="aiPredictions">-</div>
+              <div class="stat-label">Vorhersagen</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-value" id="aiAccuracy">-</div>
+              <div class="stat-label">Genauigkeit</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-value" id="aiPatterns">-</div>
+              <div class="stat-label">Pattern</div>
+            </div>
+          </div>
+          
+          <!-- AI Action Buttons -->
+          <div class="ai-actions">
+            <button class="ai-btn" id="testAiBtn">Test AI</button>
+            <button class="ai-btn danger" id="resetAiBtn">Reset Data</button>
+          </div>
+        </div>
       </div>
     </div>
     

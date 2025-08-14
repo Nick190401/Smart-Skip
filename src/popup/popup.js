@@ -3,10 +3,14 @@ class PopupManager {
   constructor() {
     this.currentDomain = '';
     this.currentSeries = null;
+    this.statusTimeout = null; // For managing status message timeout
     this.settings = {
       globalEnabled: true,
       domains: {},
-      series: {}
+      series: {},
+      // AI Settings
+      aiDetection: false,
+      aiConfidence: 0.75
     };
     this.languageManager = new LanguageManager();
     
@@ -89,7 +93,10 @@ class PopupManager {
         this.settings = {
           globalEnabled: loadedSettings.globalEnabled !== undefined ? loadedSettings.globalEnabled : true,
           domains: loadedSettings.domains || {},
-          series: loadedSettings.series || {}
+          series: loadedSettings.series || {},
+          // AI Settings
+          aiDetection: loadedSettings.aiDetection !== undefined ? loadedSettings.aiDetection : false,
+          aiConfidence: loadedSettings.aiConfidence !== undefined ? loadedSettings.aiConfidence : 0.75
         };
         console.log(`✅ Settings loaded successfully from ${loadMethod}:`, this.settings);
         this.showStatus(`Einstellungen geladen (${loadMethod})`, 'success');
@@ -107,7 +114,10 @@ class PopupManager {
       this.settings = {
         globalEnabled: true,
         domains: {},
-        series: {}
+        series: {},
+        // AI Settings
+        aiDetection: false,
+        aiConfidence: 0.75
       };
     }
   }
@@ -123,7 +133,10 @@ class PopupManager {
       const validSettings = {
         globalEnabled: this.settings.globalEnabled || false,
         domains: this.settings.domains || {},
-        series: this.settings.series || {}
+        series: this.settings.series || {},
+        // AI Settings
+        aiDetection: this.settings.aiDetection || false,
+        aiConfidence: this.settings.aiConfidence || 0.75
       };
       
       console.log('💾 Attempting to save settings:', validSettings);
@@ -414,6 +427,129 @@ class PopupManager {
       await this.languageManager.saveLanguagePreference(newLanguage);
       this.applyTranslations();
     });
+    
+    // AI Settings
+    this.setupAIEventListeners();
+  }
+  
+  setupAIEventListeners() {
+    // AI toggle - Custom implementation da die Toggle-Logik speziell ist
+    const aiToggle = document.getElementById('aiToggle');
+    if (aiToggle) {
+      // Set initial state
+      if (this.settings.aiDetection) {
+        aiToggle.classList.add('active');
+      }
+      
+      aiToggle.addEventListener('click', async () => {
+        const newValue = !this.settings.aiDetection;
+        
+        try {
+          // Update settings
+          this.settings.aiDetection = newValue;
+          
+          // Update UI
+          if (newValue) {
+            aiToggle.classList.add('active');
+          } else {
+            aiToggle.classList.remove('active');
+          }
+          
+          // Toggle advanced settings
+          this.toggleAIAdvancedSettings(newValue);
+          
+          // Save settings
+          await this.saveSettings();
+          await this.sendUpdateToContentScript();
+          
+          // Update statistics if enabled
+          if (newValue) {
+            setTimeout(() => this.updateAIStatistics(), 500);
+          }
+          
+          this.showStatus(newValue ? '🤖 AI Detection aktiviert' : '🤖 AI Detection deaktiviert', 'success', 2000);
+          
+        } catch (error) {
+          console.error('Error updating AI toggle:', error);
+          this.showStatus('Fehler beim Speichern der AI-Einstellung', 'error');
+          
+          // Revert toggle state
+          if (newValue) {
+            aiToggle.classList.remove('active');
+          } else {
+            aiToggle.classList.add('active');
+          }
+          this.settings.aiDetection = !newValue;
+        }
+      });
+    }
+    
+    // AI Confidence Slider
+    const aiConfidenceSlider = document.getElementById('aiConfidenceSlider');
+    const confidenceValue = document.getElementById('confidenceValue');
+    
+    if (aiConfidenceSlider && confidenceValue) {
+      // Set initial value
+      const initialConfidence = Math.round((this.settings.aiConfidence || 0.75) * 100);
+      aiConfidenceSlider.value = initialConfidence;
+      confidenceValue.textContent = initialConfidence + '%';
+      
+      aiConfidenceSlider.addEventListener('input', async (e) => {
+        const value = parseInt(e.target.value);
+        confidenceValue.textContent = value + '%';
+        
+        try {
+          this.settings.aiConfidence = value / 100;
+          await this.saveSettings();
+          await this.sendUpdateToContentScript();
+          
+          // Show brief feedback
+          this.showStatus(`AI Confidence: ${value}%`, 'info', 1000);
+          
+        } catch (error) {
+          console.error('Error saving AI confidence:', error);
+          this.showStatus('Fehler beim Speichern der Confidence-Einstellung', 'error');
+        }
+      });
+    }
+    
+    // AI Test Button
+    const testAiBtn = document.getElementById('testAiBtn');
+    if (testAiBtn) {
+      testAiBtn.addEventListener('click', async () => {
+        testAiBtn.disabled = true;
+        testAiBtn.textContent = 'Testing...';
+        
+        try {
+          await this.testAIDetection();
+          this.showStatus('🧠 AI Test durchgeführt', 'success', 2000);
+          setTimeout(() => this.updateAIStatistics(), 1000);
+        } catch (error) {
+          this.showStatus('AI Test fehlgeschlagen: ' + error.message, 'error');
+        }
+        
+        setTimeout(() => {
+          testAiBtn.disabled = false;
+          testAiBtn.textContent = 'Test AI';
+        }, 2000);
+      });
+    }
+    
+    // AI Reset Button
+    const resetAiBtn = document.getElementById('resetAiBtn');
+    if (resetAiBtn) {
+      resetAiBtn.addEventListener('click', async () => {
+        if (confirm('Alle AI-Lerndaten zurücksetzen? Dies kann nicht rückgängig gemacht werden.')) {
+          try {
+            await this.resetAILearningData();
+            this.showStatus('🗑️ AI-Daten zurückgesetzt', 'success', 2000);
+            this.updateAIStatistics();
+          } catch (error) {
+            this.showStatus('Reset fehlgeschlagen: ' + error.message, 'error');
+          }
+        }
+      });
+    }
   }
 
   setupToggle(toggleId, getter, setter) {
@@ -533,9 +669,93 @@ class PopupManager {
 
     this.updateCurrentSeriesUI();
     
+    // Update AI settings
+    this.updateAIDisplay();
+    
     // Apply translations
     if (this.languageManager) {
       this.applyTranslations();
+    }
+  }
+  
+  updateAIDisplay() {
+    console.log('🎛️ Updating AI display with settings:', {
+      aiDetection: this.settings.aiDetection,
+      aiConfidence: this.settings.aiConfidence
+    });
+    
+    // Update AI toggle
+    const aiToggle = document.getElementById('aiToggle');
+    if (this.settings.aiDetection) {
+      aiToggle.classList.add('active');
+      console.log('✅ AI Toggle set to ACTIVE');
+    } else {
+      aiToggle.classList.remove('active');
+      console.log('❌ AI Toggle set to INACTIVE');
+    }
+    
+    // Update AI advanced settings visibility
+    this.toggleAIAdvancedSettings(this.settings.aiDetection);
+    
+    // Update confidence slider
+    const aiConfidenceSlider = document.getElementById('aiConfidenceSlider');
+    const confidenceValue = document.getElementById('confidenceValue');
+    
+    if (aiConfidenceSlider && confidenceValue) {
+      const confidence = Math.round((this.settings.aiConfidence || 0.75) * 100);
+      aiConfidenceSlider.value = confidence;
+      confidenceValue.textContent = confidence + '%';
+      console.log('🎚️ AI Confidence slider set to:', confidence + '%');
+    }
+    
+    // Update AI statistics if enabled
+    if (this.settings.aiDetection) {
+      this.updateAIStatistics();
+    }
+  }
+  
+  toggleAIAdvancedSettings(show) {
+    const advancedSettings = document.getElementById('aiAdvancedSettings');
+    if (advancedSettings) {
+      if (show) {
+        advancedSettings.classList.remove('hidden');
+      } else {
+        advancedSettings.classList.add('hidden');
+      }
+    }
+  }
+  
+  async updateAIStatistics() {
+    try {
+      const stats = await this.getAIStatsFromContentScript();
+      
+      const predictionsEl = document.getElementById('aiPredictions');
+      const accuracyEl = document.getElementById('aiAccuracy');
+      const patternsEl = document.getElementById('aiPatterns');
+      
+      if (stats && predictionsEl && accuracyEl && patternsEl) {
+        predictionsEl.textContent = stats.totalPredictions || '0';
+        accuracyEl.textContent = Math.round((stats.accuracyRate || 0)) + '%';
+        
+        const patternsLearned = stats.patternsLearned || {};
+        const totalPatterns = Object.values(patternsLearned).reduce((sum, count) => sum + count, 0);
+        patternsEl.textContent = totalPatterns;
+      } else {
+        // Set fallback values
+        if (predictionsEl) predictionsEl.textContent = '-';
+        if (accuracyEl) accuracyEl.textContent = '-';
+        if (patternsEl) patternsEl.textContent = '-';
+      }
+    } catch (error) {
+      console.warn('Could not get AI stats:', error);
+      // Set fallback values
+      const predictionsEl = document.getElementById('aiPredictions');
+      const accuracyEl = document.getElementById('aiAccuracy');
+      const patternsEl = document.getElementById('aiPatterns');
+      
+      if (predictionsEl) predictionsEl.textContent = '-';
+      if (accuracyEl) accuracyEl.textContent = '-';
+      if (patternsEl) patternsEl.textContent = '-';
     }
   }
 
@@ -546,7 +766,7 @@ class PopupManager {
     }, 5000);
   }
 
-  showStatus(message, type) {
+  showStatus(message, type, duration = 3000) {
     const statusEl = document.getElementById('statusMessage');
     
     // Translate common status messages
@@ -559,9 +779,15 @@ class PopupManager {
     // Log for debugging
     console.log(`[PopupManager] Status: ${translatedMessage} (${type})`);
     
-    setTimeout(() => {
+    // Clear any existing timeout to prevent overlapping
+    if (this.statusTimeout) {
+      clearTimeout(this.statusTimeout);
+    }
+    
+    this.statusTimeout = setTimeout(() => {
       statusEl.classList.add('hidden');
-    }, 3000);
+      this.statusTimeout = null;
+    }, duration);
   }
   
   translateStatusMessage(message) {
@@ -670,6 +896,107 @@ class PopupManager {
         noSeriesMsg.textContent = this.languageManager.t('noSeriesDetected');
       }
     }
+  }
+  
+  // === AI INTEGRATION METHODS ===
+  // Handle AI-related popup interactions
+  
+  handleAIMessage(message, sender, sendResponse) {
+    switch (message.action) {
+      case 'getAIStats':
+        this.getAIStatsFromContentScript()
+          .then(stats => sendResponse(stats))
+          .catch(error => sendResponse(null));
+        return true; // Keep message channel open
+        
+      case 'updateAI':
+        this.updateAISetting('aiDetection', message.enabled);
+        sendResponse({ success: true });
+        break;
+        
+      case 'updateAIConfidence':
+        this.updateAISetting('aiConfidence', message.confidence);
+        sendResponse({ success: true });
+        break;
+        
+      case 'testAI':
+        this.testAIDetection()
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ error: error.message }));
+        return true;
+        
+      case 'resetAI':
+        this.resetAILearningData()
+          .then(() => sendResponse({ success: true }))
+          .catch(error => sendResponse({ error: error.message }));
+        return true;
+        
+      default:
+        sendResponse({ error: 'Unknown AI action' });
+    }
+  }
+  
+  async getAIStatsFromContentScript() {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+          chrome.tabs.sendMessage(tabs[0].id, { action: 'getAIStats' }, (response) => {
+            if (chrome.runtime.lastError) {
+              reject(chrome.runtime.lastError);
+            } else {
+              resolve(response);
+            }
+          });
+        } else {
+          reject(new Error('No active tab'));
+        }
+      });
+    });
+  }
+  
+  async updateAISetting(key, value) {
+    this.settings[key] = value;
+    await this.saveSettings();
+    
+    // Notify content script
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, {
+          action: 'updateSettings',
+          settings: this.settings
+        });
+      }
+    });
+  }
+  
+  async testAIDetection() {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+          chrome.tabs.sendMessage(tabs[0].id, { action: 'testAI' }, (response) => {
+            if (chrome.runtime.lastError) {
+              reject(chrome.runtime.lastError);
+            } else {
+              resolve(response);
+            }
+          });
+        } else {
+          reject(new Error('No active tab'));
+        }
+      });
+    });
+  }
+  
+  async resetAILearningData() {
+    // Clear local AI training data
+    await chrome.storage.local.remove(['aiTrainingData']);
+    
+    // Notify content script to reset its data
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'resetAI' });
+      }
+    });
   }
 }
 

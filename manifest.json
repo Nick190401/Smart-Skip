@@ -68,6 +68,8 @@
       ],
       "js": [
         "src/shared/language.js",
+        "src/api/smartSkipAPI.js",
+        "src/ai/contentDetector.js",
         "src/content/skipper.js"
       ],
       "run_at": "document_idle",
