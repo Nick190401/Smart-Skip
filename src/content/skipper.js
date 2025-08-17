@@ -14,6 +14,9 @@ class VideoPlayerSkipper {
     this.seriesCheckInterval = null;
     this.seriesDetectionTimeout = null;
     this.lastUrl = null;
+    this.lastSeriesDetection = 0; // Cache for series detection
+    this.lastDetectionUrl = null; // URL-based cache
+    this.lastDomStateHash = null; // DOM state for cache validation
     
     this.supportedDomains = [
       'netflix.',
@@ -219,7 +222,7 @@ class VideoPlayerSkipper {
       this.verboseLogging = false;
     }
   }
-  
+
   handleStorageChange(changes) {
     if (changes.skipperSettings) {
       const newSettings = changes.skipperSettings.newValue;
@@ -436,11 +439,57 @@ class VideoPlayerSkipper {
       const className = (button.className || '').toLowerCase();
       const href = button.getAttribute('href') || '';
       
+      // Check for next episode buttons first (require immediate force detection)
+      const nextEpisodePatterns = [
+        'next episode', 'nächste episode', 'nächste folge', 'next', 'weiter',
+        'continue watching', 'weiter schauen', 'continuer', 'siguiente',
+        'nächste', 'continue', 'play next', 'automatisch weiter'
+      ];
+
+      const isNextEpisodeButton = nextEpisodePatterns.some(pattern => 
+        buttonText.includes(pattern) || ariaLabel.includes(pattern) || className.includes(pattern)
+      );
+
+      // Also check data attributes for next episode indicators
+      const dataAttrs = ['data-uia', 'data-testid', 'data-automation-id', 'data-t'];
+      const hasNextEpisodeDataAttr = dataAttrs.some(attr => {
+        const value = (button.getAttribute(attr) || '').toLowerCase();
+        return value.includes('next') || value.includes('episode') || value.includes('seamless') || 
+               value.includes('auto-advance') || value.includes('continue');
+      });
+
+      if (isNextEpisodeButton || hasNextEpisodeDataAttr) {
+        this.log(`🎯 Next Episode Button clicked - forcing immediate series detection`);
+        
+        // Force immediate cache reset and detection for next episode
+        this.lastSeriesDetection = 0;
+        this.lastDetectionUrl = null;
+        this.lastDomStateHash = null;
+        
+        // Multiple checks to ensure we catch the series update after episode change
+        setTimeout(() => {
+          this.log(`🔄 Detecting series after next episode click (1s)...`);
+          this.detectCurrentSeries();
+        }, 1000);
+        
+        setTimeout(() => {
+          this.log(`🔄 Detecting series after next episode click (3s)...`);
+          this.detectCurrentSeries();
+        }, 3000);
+        
+        setTimeout(() => {
+          this.log(`🔄 Detecting series after next episode click (6s)...`);
+          this.detectCurrentSeries();
+        }, 6000);
+        
+        return; // Skip general navigation detection for next episode buttons
+      }
+
       // Patterns that suggest navigation to new content
       const navigationPatterns = [
-        'next episode', 'nächste episode', 'nächste folge', 'previous episode', 'vorherige folge',
+        'previous episode', 'vorherige folge',
         'episode', 'folge', 'staffel', 'season',
-        'play', 'watch', 'schauen', 'abspielen', 'continue', 'weiter',
+        'play', 'watch', 'schauen', 'abspielen',
         'browse', 'durchsuchen', 'search', 'suche',
         'title-card', 'billboard', 'jaw-bone', 'preview-modal',
         'my list', 'meine liste', 'watchlist',
@@ -449,16 +498,14 @@ class VideoPlayerSkipper {
         'playlist', 'channel', 'video',
         'thumbnail', 'poster', 'cover', 'tile'
       ];
-      
+
       const seriesChangePatterns = [
         '/title/', '/series/', '/show/', '/watch/', '/video/',
         '/movie/', '/film/', '/anime/', '/drama/',
         '/episode/', '/folge/', '/season/', '/staffel/'
       ];
-      
-      let mightChangeSeries = false;
-      
-      // Check button text and aria-label
+
+      let mightChangeSeries = false;      // Check button text and aria-label
       for (const pattern of navigationPatterns) {
         if (buttonText.includes(pattern) || ariaLabel.includes(pattern) || className.includes(pattern)) {
           mightChangeSeries = true;
@@ -535,6 +582,7 @@ class VideoPlayerSkipper {
         
         video.addEventListener('loadedmetadata', () => {
           this.verboseLog(`📺 Video ${index + 1} metadata loaded - checking for series update`);
+          
           setTimeout(() => {
             this.detectCurrentSeries();
           }, 500);
@@ -628,6 +676,28 @@ class VideoPlayerSkipper {
   }
 
   detectCurrentSeries() {
+    // Smart cache - prevent excessive detection but allow after DOM changes
+    const now = Date.now();
+    const currentUrl = window.location.href;
+    
+    // Check if DOM might have changed (page reload, new content)
+    const hasVideo = document.querySelector('video') !== null;
+    const hasNetflixContent = document.querySelector('[data-uia*="title"], [data-uia*="video"]') !== null;
+    const domStateHash = `${hasVideo}-${hasNetflixContent}-${document.title}`;
+    
+    // Only cache if same URL AND same DOM state AND within short timeframe
+    if (this.lastSeriesDetection && 
+        this.lastDetectionUrl === currentUrl && 
+        this.lastDomStateHash === domStateHash &&
+        (now - this.lastSeriesDetection) < 200) {
+      // Skip detection only if everything is identical
+      return;
+    }
+    
+    this.lastSeriesDetection = now;
+    this.lastDetectionUrl = currentUrl;
+    this.lastDomStateHash = domStateHash;
+    
     const newSeries = this.extractSeriesInfo();
     
     // Special page type handling
@@ -808,72 +878,90 @@ class VideoPlayerSkipper {
     
     this.verboseLog(`📍 Netflix page type: watch=${isWatchPage}, title=${isTitlePage}, browse=${isBrowsePage}, hasVideo=${hasVideo}`);
     
-    // Prioritized selectors for series titles (not episode titles)
-    const seriesSelectors = [
-      '[data-uia="title-card-series-title"]',
-      '[data-uia="previewModal-seriesTitle"]', 
-      '[data-uia="dp-series-title"]',
-      '.title-card-series-title',
-      '.series-title-label',
-      '.series-title-text',
-      'h2.ltr-1kl91x8',
-      'h1.ltr-1kl91x8',
-      'h3.ltr-1kl91x8',
-      'h1[class*="ltr-"]',
-      'h2[class*="ltr-"]',
-      'h3[class*="ltr-"]',
-      '[data-uia="video-title"]',
-      'h4[data-uia="fallback-text-video-title"]',
-      '.video-title',
-      '.previewModal--detailsMetadata-title',
-      '.title-info-metadata h1',
-      '.billboard-title',
-      '.video-metadata h3',
-      '.episode-metadata .series-link',
-      '.show-title'
-    ];
-    
-    for (const selector of seriesSelectors) {
-      const element = document.querySelector(selector);
-      if (element?.textContent?.trim()) {
-        const candidateTitle = element.textContent.trim();
-        this.verboseLog(`📺 Found title candidate with ${selector}: "${candidateTitle}"`);
+    // Smart extraction from video-title structure
+    const videoTitleElement = document.querySelector('[data-uia="video-title"]');
+    if (videoTitleElement) {
+      this.verboseLog(`📺 Found video-title element: analyzing structure...`);
+      
+      // Look for h4 (series title) inside video-title
+      const h4Element = videoTitleElement.querySelector('h4');
+      if (h4Element?.textContent?.trim()) {
+        const candidateTitle = h4Element.textContent.trim();
+        this.verboseLog(`✅ Found series title in h4: "${candidateTitle}"`);
         
-        // Filter out episode-like titles
-        const episodePattern = /^(Episode|E)\s*\d+|^\d+\.\s|^S\d+E\d+|^\d+:\s|^Folge\s*\d+|^Flg\.\s*\d+|^Teil\s*\d+|^Chapter\s*\d+|^Kapitel\s*\d+/i;
-        const timePattern = /^\d+:\d+/;
-        const mixedEpisodePattern = /.*Flg\.\s*\d+|.*Folge\s*\d+|.*Episode\s*\d+|.*Teil\s*\d+/i;
-        
-        if (!episodePattern.test(candidateTitle) && 
-            !timePattern.test(candidateTitle) && 
-            !mixedEpisodePattern.test(candidateTitle)) {
-          if (candidateTitle.length > 2 && !/^\d+$/.test(candidateTitle)) {
-            title = candidateTitle;
-            this.verboseLog(`✅ Using as series title: "${title}"`);
-            break;
-          } else {
-            this.verboseLog(`❌ Rejected (too short or just number): "${candidateTitle}"`);
+        // Basic validation for series title
+        if (candidateTitle.length > 2 && !/^\d+$/.test(candidateTitle)) {
+          title = candidateTitle;
+          
+          // Extract episode info from spans
+          const spans = videoTitleElement.querySelectorAll('span');
+          if (spans.length > 0) {
+            let episodeInfo = [];
+            spans.forEach(span => {
+              const text = span.textContent?.trim();
+              if (text) {
+                episodeInfo.push(text);
+              }
+            });
+            
+            if (episodeInfo.length > 0) {
+              episode = episodeInfo.join(' - ');
+              this.verboseLog(`📺 Extracted episode from spans: "${episode}"`);
+            }
           }
-        } else {
-          this.verboseLog(`❌ Rejected (contains episode info): "${candidateTitle}"`);
         }
       }
     }
     
-    // Episode extraction (only on watch pages with video)
+    // Fallback to other selectors if video-title didn't work
+    if (!title) {
+      const seriesSelectors = [
+        '[data-uia="title-card-series-title"]',
+        '[data-uia="previewModal-seriesTitle"]', 
+        '[data-uia="dp-series-title"]',
+        'h4[data-uia="fallback-text-video-title"]',
+        'h1[class*="ltr-"]', // Common Netflix class pattern
+        'h2[class*="ltr-"]',
+        '.billboard-title',
+        '.title-info-metadata h1'
+      ];
+      
+      for (const selector of seriesSelectors) {
+        const element = document.querySelector(selector);
+        if (element?.textContent?.trim()) {
+          const candidateTitle = element.textContent.trim();
+          this.verboseLog(`📺 Found title candidate with ${selector}: "${candidateTitle}"`);
+          
+          // Filter out episode-like titles
+          const episodePattern = /^(Episode|E)\s*\d+|^\d+\.\s|^S\d+E\d+|^\d+:\s|^Folge\s*\d+|^Flg\.\s*\d+|^Teil\s*\d+|^Chapter\s*\d+|^Kapitel\s*\d+/i;
+          const timePattern = /^\d+:\d+/;
+          const mixedEpisodePattern = /.*Flg\.\s*\d+|.*Folge\s*\d+|.*Episode\s*\d+|.*Teil\s*\d+/i;
+          
+          if (!episodePattern.test(candidateTitle) && 
+              !timePattern.test(candidateTitle) && 
+              !mixedEpisodePattern.test(candidateTitle)) {
+            if (candidateTitle.length > 2 && !/^\d+$/.test(candidateTitle)) {
+              title = candidateTitle;
+              this.verboseLog(`✅ Using as series title: "${title}"`);
+              break;
+            } else {
+              this.verboseLog(`❌ Rejected (too short or just number): "${candidateTitle}"`);
+            }
+          } else {
+            this.verboseLog(`❌ Rejected (contains episode info): "${candidateTitle}"`);
+          }
+        }
+      }
+    }
+    
+    // Episode extraction (only on watch pages with video) - optimized selectors
     if (isWatchPage || hasVideo) {
       const episodeSelectors = [
-        '[data-uia="episode-selector"] button[aria-expanded="false"]',
+        '[data-uia="episode-selector"] button[aria-expanded="false"]', // Most reliable
         '[data-uia="episode-title"]',
         '[data-uia="episode-number"]',
         '.episode-selector button',
-        '.episode-title',
-        '.episode-number',
-        '[data-uia="title-episode-title"]',
-        '.episode-metadata .episode-title',
-        '.episode-info .title',
         '.current-episode',
-        '.episode-selector-label',
         '*[data-uia*="episode"]'
       ];
       
@@ -1236,6 +1324,22 @@ class VideoPlayerSkipper {
   handleMessage(request, sender, sendResponse) {
     switch (request.action) {
       case 'detectSeries':
+        // Force-refresh detection when popup requests it (bypass cache)
+        this.log('🔄 Force-refresh der Serie-Erkennung angefordert...');
+        this.lastSeriesDetection = 0; // Reset cache
+        this.lastDetectionUrl = null;
+        this.lastDomStateHash = null;
+        
+        // Force immediate detection
+        this.detectCurrentSeries();
+        
+        // Log the newly detected series after force-refresh
+        if (this.currentSeries) {
+          this.log(`✅ Nach Force-Refresh erkannt: ${this.currentSeries.title} - Episode ${this.currentSeries.episode} (${this.currentSeries.source})`);
+        } else {
+          this.log('❌ Nach Force-Refresh keine Serie erkannt');
+        }
+        
         sendResponse({ series: this.currentSeries });
         break;
         
@@ -1425,6 +1529,21 @@ class VideoPlayerSkipper {
     const text = (button.textContent || button.getAttribute('aria-label') || button.title || '').toLowerCase();
     const selectorLower = selector.toLowerCase();
     
+    // Check for "watch/view" buttons first - these should NOT be clicked for skipping
+    const watchPatterns = ['ansehen', 'anschauen', 'watch', 'view', 'play', 'abspielen', 'schauen'];
+    const isWatchButton = watchPatterns.some(pattern => text.includes(pattern));
+    
+    // Special check for "Abspann ansehen" - this is a WATCH button, not a SKIP button
+    if (text.includes('abspann') && text.includes('ansehen')) {
+      this.verboseLog(`❌ Detected "Abspann ansehen" (watch credits) button, not a skip button: "${text}"`);
+      return 'watch'; // This should NOT be clicked
+    }
+    
+    if (isWatchButton) {
+      this.verboseLog(`❌ Detected watch/view button, not a skip button: "${text}"`);
+      return 'watch'; // Special type for watch buttons that we should never click for skipping
+    }
+    
     // Selector-based detection (most reliable)
     if (selectorLower.includes('intro') || selectorLower.includes('opening')) return 'intro';
     if (selectorLower.includes('recap') || selectorLower.includes('previously')) return 'recap';
@@ -1432,14 +1551,20 @@ class VideoPlayerSkipper {
     if (selectorLower.includes('ad') || selectorLower.includes('advertisement')) return 'ads';
     if (selectorLower.includes('next') || selectorLower.includes('continue') || selectorLower.includes('advance')) return 'next';
     
-    // Text content fallback
-    if (text.includes('intro') || text.includes('opening') || text.includes('vorspann')) return 'intro';
-    if (text.includes('recap') || text.includes('previously') || text.includes('zuvor') || text.includes('bisher')) return 'recap';
-    if (text.includes('credits') || text.includes('abspann') || text.includes('end') || text.includes('ende')) return 'credits';
-    if (text.includes('ad') || text.includes('anzeige') || text.includes('werbung') || text.includes('advertisement')) return 'ads';
-    if (text.includes('next') || text.includes('nächste') || text.includes('continue') || text.includes('weiter')) return 'next';
+    // Text content detection - but only for SKIP buttons (must contain "skip" or "überspringen")
+    const skipPatterns = ['skip', 'überspringen', 'pular']; // Removed "weiter" and "next" as they're too generic
+    const isSkipButton = skipPatterns.some(pattern => text.includes(pattern));
     
-    // Generic skip button analysis
+    if (isSkipButton) {
+      if (text.includes('intro') || text.includes('opening') || text.includes('vorspann')) return 'intro';
+      if (text.includes('recap') || text.includes('previously') || text.includes('zuvor') || text.includes('bisher')) return 'recap';
+      if (text.includes('credits') || text.includes('abspann') || text.includes('end') || text.includes('ende')) return 'credits';
+      if (text.includes('ad') || text.includes('anzeige') || text.includes('werbung') || text.includes('advertisement')) return 'ads';
+      if (text.includes('next') || text.includes('nächste') || text.includes('continue') || text.includes('weiter')) return 'next';
+      return 'ads'; // Default generic skip to ads (safest)
+    }
+    
+    // Pure skip button detection
     if (text.includes('skip') || text.includes('überspringen')) {
       if (text.includes('intro') || text.includes('opening')) return 'intro';
       if (text.includes('recap') || text.includes('zuvor')) return 'recap';
@@ -1448,13 +1573,15 @@ class VideoPlayerSkipper {
       return 'ads'; // Default generic skip to ads (safest)
     }
     
-    // Aria-label analysis
+    // Aria-label analysis - only for skip actions
     const ariaLabel = (button.getAttribute('aria-label') || '').toLowerCase();
-    if (ariaLabel.includes('intro') || ariaLabel.includes('opening')) return 'intro';
-    if (ariaLabel.includes('recap') || ariaLabel.includes('previously')) return 'recap';
-    if (ariaLabel.includes('credits') || ariaLabel.includes('end')) return 'credits';
-    if (ariaLabel.includes('ad') || ariaLabel.includes('advertisement')) return 'ads';
-    if (ariaLabel.includes('next') || ariaLabel.includes('continue')) return 'next';
+    if (ariaLabel.includes('skip') || ariaLabel.includes('überspringen')) {
+      if (ariaLabel.includes('intro') || ariaLabel.includes('opening')) return 'intro';
+      if (ariaLabel.includes('recap') || ariaLabel.includes('previously')) return 'recap';
+      if (ariaLabel.includes('credits') || ariaLabel.includes('end')) return 'credits';
+      if (ariaLabel.includes('ad') || ariaLabel.includes('advertisement')) return 'ads';
+      if (ariaLabel.includes('next') || ariaLabel.includes('continue')) return 'next';
+    }
     
     this.verboseLog(`❓ Could not determine button type for selector "${selector}", text "${text}", aria-label "${ariaLabel}"`);
     return 'unknown';
@@ -1494,6 +1621,11 @@ class VideoPlayerSkipper {
         break;
       case 'next':
         shouldSkip = seriesSettings.autoNext;
+        break;
+      case 'watch':
+        // NEVER click watch/view buttons - they're for viewing content, not skipping
+        shouldSkip = false;
+        this.verboseLog(`❌ Watch/view button detected - never clicking these for skipping`);
         break;
       default:
         // Conservative handling of unknown buttons
