@@ -99,7 +99,7 @@ class VideoPlayerSkipper {
       this.log(`❌ Platform ${this.domain} not supported - Extension inactive`);
       return;
     }
-    
+
     this.log('✅ Initializing Smart Skip on supported platform...');
     
     this.detectedLanguage = this.detectPageLanguage();

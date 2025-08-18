@@ -1,9 +1,0 @@
-{
-  "active": true,
-  "version": "1.1.0",
-  "timestamp": "2025-08-18T00:00:00Z",
-  "message": "Smart Skip is currently active and working normally.",
-  "disabledVersions": [],
-  "upgradeUrl": null,
-  "gracePeriod": 604800000
-}
