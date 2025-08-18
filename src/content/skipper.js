@@ -1,20 +1,5 @@
 class VideoPlayerSkipper {
   constructor() {
-    // Store references to original DOM APIs before they can be tampered with
-    this.originalAPIs = {
-      querySelector: Document.prototype.querySelector,
-      querySelectorAll: Document.prototype.querySelectorAll,
-      addEventListener: EventTarget.prototype.addEventListener,
-      removeEventListener: EventTarget.prototype.removeEventListener,
-      MutationObserver: window.MutationObserver,
-      setTimeout: window.setTimeout,
-      setInterval: window.setInterval,
-      createElement: Document.prototype.createElement,
-      getAttribute: Element.prototype.getAttribute,
-      textContent: Object.getOwnPropertyDescriptor(Node.prototype, 'textContent'),
-      dispatchEvent: EventTarget.prototype.dispatchEvent
-    };
-    
     this.isEnabled = true;
     this.verboseLogging = false;
     this.domain = window.location.hostname;
@@ -109,41 +94,9 @@ class VideoPlayerSkipper {
     this.init();
   }
   
-  verifyCodeIntegrity() {
-    // Basic integrity check - verify core functions haven't been tampered with
-    const criticalFunctions = [
-      'querySelector',
-      'querySelectorAll', 
-      'addEventListener',
-      'MutationObserver',
-      'dispatchEvent'
-    ];
-    
-    for (const funcName of criticalFunctions) {
-      const current = this.originalAPIs[funcName];
-      const live = funcName === 'MutationObserver' ? window[funcName] : 
-                   funcName === 'querySelector' ? Document.prototype[funcName] :
-                   funcName === 'querySelectorAll' ? Document.prototype[funcName] :
-                   EventTarget.prototype[funcName];
-      
-      if (current !== live) {
-        this.log(`⚠️ Security Warning: ${funcName} may have been tampered with`);
-        return false;
-      }
-    }
-    
-    return true;
-  }
-
   async init() {
     if (!this.isSupportedPlatform) {
       this.log(`❌ Platform ${this.domain} not supported - Extension inactive`);
-      return;
-    }
-
-    // Verify code integrity before proceeding
-    if (!this.verifyCodeIntegrity()) {
-      this.log('🔒 Code integrity check failed - extension may be compromised');
       return;
     }
 
@@ -165,24 +118,18 @@ class VideoPlayerSkipper {
       return true;
     });
     
-    // Debug interface for manual testing - ONLY in development mode with additional security
-    if ((chrome.runtime.getManifest().version.includes('dev') || chrome.runtime.getManifest().name.includes('dev')) && 
-        window.location.hostname === 'localhost') {
-      // Create a secure debug interface with access controls
-      const debugToken = Math.random().toString(36).substr(2);
-      console.log(`[Smart Skip] Debug token: ${debugToken}`);
-      
-      window.__autoSkipper = {
-        // Require token for access
-        auth: (token) => token === debugToken,
-        // Limit debug interface to read-only operations with authentication
-        getDetectedLanguage: (token) => token === debugToken ? this.detectedLanguage : null,
-        getPatterns: (token) => token === debugToken ? this.buttonPatterns : null,
-        getCurrentSeries: (token) => token === debugToken ? this.currentSeries : null,
-        getSettings: (token) => token === debugToken ? ({ ...this.settings }) : null,
-        isEnabled: (token) => token === debugToken ? this.isEnabled : null,
-      };
-    }
+    // Debug interface for manual testing
+    window.__autoSkipper = {
+      start: () => this.start(),
+      stop: () => this.stop(),
+      scan: () => this.scanForButtons(),
+      setVerbose: (enabled) => this.setVerboseLogging(enabled),
+      // refreshLanguage: () => this.refreshLanguageDetection(), // COMMENTED OUT - function is unused
+      getDetectedLanguage: () => this.detectedLanguage,
+      getPatterns: () => this.buttonPatterns,
+      getCurrentSeries: () => this.currentSeries,
+      instance: this
+    };
     
     if (this.isEnabled) {
       this.start();
@@ -198,49 +145,6 @@ class VideoPlayerSkipper {
    * Loads settings with fallback chain: sync -> local -> localStorage -> memory
    * This ensures settings work even in temporary/development extensions
    */
-  validateSettings(settings) {
-    // Validate settings structure and values for security
-    if (!settings || typeof settings !== 'object') {
-      return false;
-    }
-    
-    // Check for required properties
-    const requiredProps = ['globalEnabled', 'verboseLogging', 'domains', 'series'];
-    for (const prop of requiredProps) {
-      if (!(prop in settings)) {
-        this.verboseLog(`Settings validation failed - missing property: ${prop}`);
-        return false;
-      }
-    }
-    
-    // Validate data types
-    if (typeof settings.globalEnabled !== 'boolean' ||
-        typeof settings.verboseLogging !== 'boolean' ||
-        typeof settings.domains !== 'object' ||
-        typeof settings.series !== 'object') {
-      this.verboseLog('Settings validation failed - invalid data types');
-      return false;
-    }
-    
-    // Validate domain keys (must be valid hostnames)
-    for (const domain in settings.domains) {
-      if (!/^[a-zA-Z0-9.-]+$/.test(domain)) {
-        this.verboseLog(`Settings validation failed - invalid domain: ${domain}`);
-        return false;
-      }
-    }
-    
-    // Validate series keys format
-    for (const seriesKey in settings.series) {
-      if (!seriesKey.includes(':') || seriesKey.split(':').length !== 2) {
-        this.verboseLog(`Settings validation failed - invalid series key: ${seriesKey}`);
-        return false;
-      }
-    }
-    
-    return true;
-  }
-
   async loadSettings() {
     try {
       let loadedSettings = null;
@@ -294,18 +198,10 @@ class VideoPlayerSkipper {
       }
       
       if (loadedSettings) {
-        // SECURITY: Validate settings before using them
-        if (!this.validateSettings(loadedSettings)) {
-          this.verboseLog('Loaded settings failed validation - using defaults');
-          loadedSettings = null;
-        } else {
-          this.settings = { ...this.settings, ...loadedSettings };
-          this.log(`Settings loaded from ${loadMethod}:`, this.settings);
-        }
-      }
-      
-      if (!loadedSettings) {
-        this.log('No valid settings found, using defaults');
+        this.settings = { ...this.settings, ...loadedSettings };
+        this.log(`Settings loaded from ${loadMethod}:`, this.settings);
+      } else {
+        this.log('No settings found, using defaults');
       }
       
       this.verboseLogging = this.settings.verboseLogging;
@@ -453,27 +349,8 @@ class VideoPlayerSkipper {
   }
   
   setupContentChangeDetection() {
-    // Enhanced DoS protection
-    this.mutationCounter = 0;
-    this.mutationWindowStart = Date.now();
-    this.maxMutationsPerWindow = 100; // Max mutations per 5 second window
-    this.mutationWindowDuration = 5000;
-    
     // Monitor DOM changes that indicate new series/episode content
-    this.contentObserver = new this.originalAPIs.MutationObserver((mutations) => {
-      // DoS protection: Rate limit mutation processing
-      const now = Date.now();
-      if (now - this.mutationWindowStart > this.mutationWindowDuration) {
-        this.mutationCounter = 0;
-        this.mutationWindowStart = now;
-      }
-      
-      this.mutationCounter += mutations.length;
-      if (this.mutationCounter > this.maxMutationsPerWindow) {
-        this.verboseLog('Mutation rate limit exceeded - ignoring mutations');
-        return;
-      }
-      
+    this.contentObserver = new MutationObserver((mutations) => {
       let shouldCheckSeries = false;
       
       for (const mutation of mutations) {
@@ -799,20 +676,9 @@ class VideoPlayerSkipper {
   }
 
   detectCurrentSeries() {
-    // Enhanced rate limiting for security
+    // Smart cache - prevent excessive detection but allow after DOM changes
     const now = Date.now();
     const currentUrl = window.location.href;
-    
-    // Rate limiting: max 5 detections per second
-    if (this.lastSeriesDetection && (now - this.lastSeriesDetection) < 200) {
-      if (this.detectionRateCounter > 5) {
-        this.verboseLog('Rate limit exceeded - skipping detection');
-        return;
-      }
-      this.detectionRateCounter = (this.detectionRateCounter || 0) + 1;
-    } else {
-      this.detectionRateCounter = 0;
-    }
     
     // Check if DOM might have changed (page reload, new content)
     const hasVideo = document.querySelector('video') !== null;
@@ -1456,19 +1322,6 @@ class VideoPlayerSkipper {
 
   // Message handler for popup communication
   handleMessage(request, sender, sendResponse) {
-    // Validate message source - only accept from extension context
-    if (!sender || sender.id !== chrome.runtime.id) {
-      this.verboseLog('Rejecting message from invalid sender');
-      sendResponse({ error: 'Invalid sender' });
-      return;
-    }
-    
-    // Validate request structure
-    if (!request || typeof request !== 'object' || !request.action) {
-      sendResponse({ error: 'Invalid request format' });
-      return;
-    }
-    
     switch (request.action) {
       case 'detectSeries':
         // Force-refresh detection when popup requests it (bypass cache)
@@ -1587,43 +1440,6 @@ class VideoPlayerSkipper {
   // === BUTTON SCANNING AND CLICKING SYSTEM ===
   // Core functionality for finding and clicking skip buttons
   
-  // Safe DOM query methods using stored original APIs
-  safeQuerySelector(selector) {
-    try {
-      return this.originalAPIs.querySelector.call(document, selector);
-    } catch (error) {
-      this.verboseLog(`Safe querySelector failed: ${error.message}`);
-      return null;
-    }
-  }
-  
-  safeQuerySelectorAll(selector) {
-    try {
-      return this.originalAPIs.querySelectorAll.call(document, selector);
-    } catch (error) {
-      this.verboseLog(`Safe querySelectorAll failed: ${error.message}`);
-      return [];
-    }
-  }
-  
-  safeGetAttribute(element, attr) {
-    try {
-      return this.originalAPIs.getAttribute.call(element, attr);
-    } catch (error) {
-      this.verboseLog(`Safe getAttribute failed: ${error.message}`);
-      return null;
-    }
-  }
-  
-  safeGetTextContent(element) {
-    try {
-      return this.originalAPIs.textContent.get.call(element);
-    } catch (error) {
-      this.verboseLog(`Safe textContent failed: ${error.message}`);
-      return '';
-    }
-  }
-
   scanForButtons() {
     if (!this.isEnabled) return;
     
@@ -1636,9 +1452,9 @@ class VideoPlayerSkipper {
     
     const seriesSettings = this.getCurrentSeriesSettings();
     
-    // Try platform-specific selectors first (more reliable) with safe queries
+    // Try platform-specific selectors first (more reliable)
     for (const selector of this.buttonPatterns.selectors) {
-      const buttons = this.safeQuerySelectorAll(selector);
+      const buttons = document.querySelectorAll(selector);
       for (const button of buttons) {
         const buttonType = this.getButtonType(button, selector);
         if (this.shouldSkipButtonType(buttonType, seriesSettings) &&
@@ -1650,8 +1466,8 @@ class VideoPlayerSkipper {
       }
     }
     
-    // Then try text-based detection (broader but less reliable) with safe queries
-    const allButtons = this.safeQuerySelectorAll('button, [role="button"], a, div[onclick]');
+    // Then try text-based detection (broader but less reliable)
+    const allButtons = document.querySelectorAll('button, [role="button"], a, div[onclick]');
     
     for (const button of allButtons) {
       const buttonType = this.getButtonTypeFromText(button);
@@ -2032,109 +1848,8 @@ class VideoPlayerSkipper {
    * Comprehensive button click simulation with multiple interaction methods
    * Includes pre-click mouse movement for platforms that require hover
    */
-  validateSkipButton(button) {
-    // Enhanced button validation to prevent fake skip buttons
-    
-    // 1. Check if button is in legitimate streaming interface
-    const validContainers = [
-      '[data-uia*="player"]',
-      '[class*="player"]',
-      '[class*="video"]',
-      '[id*="player"]',
-      '[class*="controls"]'
-    ];
-    
-    let isInValidContainer = false;
-    let parent = button.parentElement;
-    let depth = 0;
-    
-    while (parent && depth < 10) {
-      for (const containerSelector of validContainers) {
-        if (parent.matches && parent.matches(containerSelector)) {
-          isInValidContainer = true;
-          break;
-        }
-      }
-      if (isInValidContainer) break;
-      parent = parent.parentElement;
-      depth++;
-    }
-    
-    if (!isInValidContainer) {
-      this.verboseLog('Button rejected - not in valid streaming container');
-      return false;
-    }
-    
-    // 2. Check for suspicious attributes that might indicate injection
-    const suspiciousAttributes = ['onclick', 'onmousedown', 'onmouseup'];
-    for (const attr of suspiciousAttributes) {
-      if (button.hasAttribute(attr)) {
-        this.verboseLog(`Button rejected - has suspicious attribute: ${attr}`);
-        return false;
-      }
-    }
-    
-    // 3. Validate button positioning (skip buttons should be in video area)
-    const rect = button.getBoundingClientRect();
-    const video = this.safeQuerySelector('video');
-    
-    if (video) {
-      const videoRect = video.getBoundingClientRect();
-      // Button should be reasonably close to video player
-      const maxDistance = 200;
-      const distance = Math.min(
-        Math.abs(rect.top - videoRect.bottom),
-        Math.abs(rect.bottom - videoRect.top),
-        Math.abs(rect.left - videoRect.right),
-        Math.abs(rect.right - videoRect.left)
-      );
-      
-      if (distance > maxDistance) {
-        this.verboseLog('Button rejected - too far from video player');
-        return false;
-      }
-    }
-    
-    // 4. Check button creation time (reject very recently created buttons)
-    if (button.dataset.skipperValidated) {
-      return true; // Already validated
-    }
-    
-    // Mark as validated to avoid re-checking
-    button.dataset.skipperValidated = Date.now();
-    
-    return true;
-  }
-
   async clickButton(button, reason) {
     try {
-      // Additional security check: verify button is on trusted domain
-      if (!this.isSupportedPlatform) {
-        this.verboseLog('Blocking click - not on supported platform');
-        return;
-      }
-      
-      // Verify element is still attached to DOM (prevent timing attacks)
-      if (!document.contains(button)) {
-        this.verboseLog('Blocking click - element not in DOM');
-        return;
-      }
-      
-      // CRITICAL: Validate button authenticity before clicking
-      if (!this.validateSkipButton(button)) {
-        this.verboseLog('Blocking click - button failed validation');
-        return;
-      }
-      
-      // Additional href validation for anchor elements
-      if (button.tagName === 'A') {
-        const href = this.safeGetAttribute(button, 'href');
-        if (href && !href.startsWith('#') && !href.startsWith('javascript:void')) {
-          this.verboseLog('Blocking click - suspicious href in anchor button');
-          return;
-        }
-      }
-      
       this.log(`Clicking button: ${this.getElementText(button)} (${reason})`);
       
       // Prevent rapid repeated clicks on same button
@@ -2184,35 +1899,25 @@ class VideoPlayerSkipper {
   
   simulateMouseEvent(element, eventType) {
     const rect = element.getBoundingClientRect();
-    
-    // Create more authentic-looking events
-    const event = new this.originalAPIs.MouseEvent(eventType, {
+    const event = new MouseEvent(eventType, {
       view: window,
       bubbles: true,
       cancelable: true,
-      clientX: rect.left + rect.width / 2 + Math.random() * 2 - 1, // Add slight randomness
-      clientY: rect.top + rect.height / 2 + Math.random() * 2 - 1,
-      button: 0,
-      buttons: eventType === 'mousedown' ? 1 : 0,
-      detail: eventType === 'click' ? 1 : 0
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2
     });
-    
-    // Use original dispatchEvent to prevent interception
-    return this.originalAPIs.dispatchEvent.call(element, event);
+    element.dispatchEvent(event);
   }
   
   simulateKeyEvent(element, eventType, keyCode) {
-    const event = new this.originalAPIs.KeyboardEvent(eventType, {
+    const event = new KeyboardEvent(eventType, {
       view: window,
       bubbles: true,
       cancelable: true,
       keyCode: keyCode,
-      which: keyCode,
-      key: keyCode === 13 ? 'Enter' : String.fromCharCode(keyCode),
-      code: keyCode === 13 ? 'Enter' : `Key${String.fromCharCode(keyCode)}`
+      which: keyCode
     });
-    
-    return this.originalAPIs.dispatchEvent.call(element, event);
+    element.dispatchEvent(event);
   }
   
   sleep(ms) {
@@ -2240,16 +1945,12 @@ class VideoPlayerSkipper {
   // }
   
   log(message) {
-    // Sanitize message to prevent console injection
-    const sanitizedMessage = String(message).replace(/[<>]/g, '');
-    console.log(`[Smart Skip] ${sanitizedMessage}`);
+    console.log(`[Smart Skip] ${message}`);
   }
   
   verboseLog(message) {
     if (this.verboseLogging) {
-      // Sanitize message to prevent console injection
-      const sanitizedMessage = String(message).replace(/[<>]/g, '');
-      console.log(`[Smart Skip - Verbose] ${sanitizedMessage}`);
+      console.log(`[Smart Skip - Verbose] ${message}`);
     }
   }
   
