@@ -158,7 +158,7 @@ class LanguageManager {
           }
         }
       } catch (syncError) {
-        console.warn('Language: Sync storage failed:', syncError.message);
+        // Sync storage failed - try other methods
       }
       
       // Try local storage if sync failed
@@ -171,7 +171,7 @@ class LanguageManager {
             }
           }
         } catch (localError) {
-          console.warn('Language: Local storage failed:', localError.message);
+          // Local storage failed
         }
       }
       
@@ -182,7 +182,6 @@ class LanguageManager {
         this.currentLanguage = 'auto';
       }
     } catch (error) {
-      console.error('Error loading language preference:', error);
       this.currentLanguage = 'auto';
     }
   }
@@ -195,16 +194,13 @@ class LanguageManager {
       // Try sync storage first
       try {
         await chrome.storage.sync.set({ smartSkipLanguage: languageSettings });
-        console.log('Language preference saved to sync storage');
       } catch (syncError) {
-        console.warn('Language sync storage failed, using local storage:', syncError);
         await chrome.storage.local.set({ smartSkipLanguage: languageSettings });
-        console.log('Language preference saved to local storage as fallback');
       }
       
       this.currentLanguage = language;
     } catch (error) {
-      console.error('Error saving language preference:', error);
+      // Error saving language preference - silently fail
     }
   }
   
@@ -225,7 +221,6 @@ class LanguageManager {
       // Fallback to English if translation not found
       const fallback = this.translations['en']?.[key];
       if (!fallback) {
-        console.warn(`Translation missing for key: ${key}`);
         return key; // Return key as fallback
       }
       return fallback;
@@ -237,7 +232,7 @@ class LanguageManager {
   // Initialize language system
   async initialize() {
     await this.loadLanguagePreference();
-    console.log(`Language initialized: ${this.currentLanguage} (effective: ${this.getEffectiveLanguage()})`);
+    // Language initialization complete
   }
 }
 

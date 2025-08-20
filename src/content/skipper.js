@@ -70,11 +70,10 @@ class VideoPlayerSkipper {
     });
     
     if (!this.isSupportedPlatform) {
-      this.log(`❌ Unsupported platform: ${this.domain} - Extension will not activate`);
       return;
     }
     
-    this.log(`✅ Supported platform detected: ${this.domain}`);
+    // Supported platform detected
     
     // Settings hierarchy: series-specific > domain-specific > global
     this.settings = {
@@ -96,17 +95,15 @@ class VideoPlayerSkipper {
   
   async init() {
     if (!this.isSupportedPlatform) {
-      this.log(`❌ Platform ${this.domain} not supported - Extension inactive`);
       return;
     }
 
-    this.log('✅ Initializing Smart Skip on supported platform...');
+    // Initializing Smart Skip on supported platform
     
     this.detectedLanguage = this.detectPageLanguage();
     this.buttonPatterns = this.generateButtonPatterns();
     
-    this.log(`Detected language: ${this.detectedLanguage}`);
-    this.verboseLog(`Generated ${this.buttonPatterns.textPatterns.length} text patterns`);
+    // Language and patterns generated
     
     await this.loadSettings();
     
@@ -160,7 +157,7 @@ class VideoPlayerSkipper {
           }
         }
       } catch (syncError) {
-        console.warn('Skipper: Sync storage failed:', syncError.message);
+        // Sync storage failed - try other methods
       }
       
       // Fallback to local storage
@@ -174,7 +171,7 @@ class VideoPlayerSkipper {
             }
           }
         } catch (localError) {
-          console.warn('Skipper: Local storage failed:', localError.message);
+          // Local storage failed - try other methods
         }
       }
       
@@ -187,7 +184,7 @@ class VideoPlayerSkipper {
             loadMethod = 'localStorage';
           }
         } catch (lsError) {
-          console.warn('Skipper: localStorage failed:', lsError.message);
+          // localStorage failed
         }
       }
       
@@ -199,9 +196,8 @@ class VideoPlayerSkipper {
       
       if (loadedSettings) {
         this.settings = { ...this.settings, ...loadedSettings };
-        this.log(`Settings loaded from ${loadMethod}:`, this.settings);
       } else {
-        this.log('No settings found, using defaults');
+        // Using default settings
       }
       
       this.verboseLogging = this.settings.verboseLogging;
@@ -214,10 +210,9 @@ class VideoPlayerSkipper {
         this.isEnabled = this.settings.globalEnabled;
       }
       
-      this.log(`Settings loaded - Enabled: ${this.isEnabled}, Verbose: ${this.verboseLogging}, Method: ${loadMethod}`);
+      // Settings loaded successfully
     } catch (error) {
-      console.error('Failed to load settings:', error);
-      // Safe defaults if all storage methods fail
+      // Failed to load settings - use safe defaults
       this.isEnabled = true;
       this.verboseLogging = false;
     }
@@ -276,7 +271,7 @@ class VideoPlayerSkipper {
     const interval = shouldCheckFrequently ? 3000 : 30000;
     const reason = this.currentSeries ? 'series detected' : (isOnContentPage ? 'on content page but no series detected' : 'no series detected');
     
-    this.verboseLog(`🕒 Setting series check interval to ${interval/1000}s (${reason})`);
+    // Setting series check interval
     
     this.seriesCheckInterval = setInterval(() => {
       this.detectCurrentSeries();
@@ -317,9 +312,7 @@ class VideoPlayerSkipper {
     
     const result = (isContentPage || hasVideo) && !isBrowsePage;
     
-    if (result) {
-      this.verboseLog(`📍 Detected potential content page: URL patterns=${isContentPage}, hasVideo=${hasVideo}, notBrowse=${!isBrowsePage}`);
-    }
+    // Content page detection complete
     
     return result;
   }
@@ -405,7 +398,6 @@ class VideoPlayerSkipper {
       }
       
       if (shouldCheckSeries) {
-        this.verboseLog('🔍 Content change detected - checking for series update...');
         // Debounce to prevent excessive detection calls
         if (this.seriesDetectionTimeout) {
           clearTimeout(this.seriesDetectionTimeout);
@@ -459,7 +451,7 @@ class VideoPlayerSkipper {
       });
 
       if (isNextEpisodeButton || hasNextEpisodeDataAttr) {
-        this.log(`🎯 Next Episode Button clicked - forcing immediate series detection`);
+        // Next Episode Button clicked - forcing immediate series detection
         
         // Force immediate cache reset and detection for next episode
         this.lastSeriesDetection = 0;
@@ -468,17 +460,14 @@ class VideoPlayerSkipper {
         
         // Multiple checks to ensure we catch the series update after episode change
         setTimeout(() => {
-          this.log(`🔄 Detecting series after next episode click (1s)...`);
           this.detectCurrentSeries();
         }, 1000);
         
         setTimeout(() => {
-          this.log(`🔄 Detecting series after next episode click (3s)...`);
           this.detectCurrentSeries();
         }, 3000);
         
         setTimeout(() => {
-          this.log(`🔄 Detecting series after next episode click (6s)...`);
           this.detectCurrentSeries();
         }, 6000);
         
@@ -509,7 +498,7 @@ class VideoPlayerSkipper {
       for (const pattern of navigationPatterns) {
         if (buttonText.includes(pattern) || ariaLabel.includes(pattern) || className.includes(pattern)) {
           mightChangeSeries = true;
-          this.verboseLog(`🎯 Button click detected (text/aria): "${pattern}" in "${buttonText || ariaLabel}"`);
+          // Verbose debug log removed: "${pattern}" in "${buttonText || ariaLabel}"`);
           break;
         }
       }
@@ -519,7 +508,7 @@ class VideoPlayerSkipper {
         for (const pattern of seriesChangePatterns) {
           if (href.includes(pattern)) {
             mightChangeSeries = true;
-            this.verboseLog(`🎯 Button click detected (href): "${pattern}" in "${href}"`);
+            // Verbose debug log removed: "${pattern}" in "${href}"`);
             break;
           }
         }
@@ -536,24 +525,24 @@ class VideoPlayerSkipper {
             value.includes('prev') || value.includes('browse') || value.includes('search')
           )) {
             mightChangeSeries = true;
-            this.verboseLog(`🎯 Button click detected (${attr}): "${value}"`);
+            // Verbose debug log removed: "${value}"`);
             break;
           }
         }
       }
       
       if (mightChangeSeries) {
-        this.verboseLog(`🔄 Navigation button clicked - will check for series change in 2 seconds`);
+        // Verbose debug log removed
         
         // Delayed detection to allow page transitions
         setTimeout(() => {
-          this.verboseLog(`🔍 Checking for series change after button click...`);
+          // Verbose debug log removed
           this.detectCurrentSeries();
         }, 2000);
         
         // Second check for slow-loading content
         setTimeout(() => {
-          this.verboseLog(`🔍 Second check for series change after button click...`);
+          // Verbose debug log removed
           this.detectCurrentSeries();
         }, 5000);
       }
@@ -570,18 +559,18 @@ class VideoPlayerSkipper {
         if (video.dataset.skipperListenersAdded) return;
         video.dataset.skipperListenersAdded = 'true';
         
-        this.verboseLog(`📺 Adding event listeners to video element ${index + 1}`);
+        // Verbose debug log removed
         
         // Key video events that suggest new content
         video.addEventListener('loadstart', () => {
-          this.verboseLog(`📺 Video ${index + 1} loadstart - possible episode change`);
+          // Verbose debug log removed
           setTimeout(() => {
             this.detectCurrentSeries();
           }, 1000);
         });
         
         video.addEventListener('loadedmetadata', () => {
-          this.verboseLog(`📺 Video ${index + 1} metadata loaded - checking for series update`);
+          // Verbose debug log removed
           
           setTimeout(() => {
             this.detectCurrentSeries();
@@ -589,7 +578,7 @@ class VideoPlayerSkipper {
         });
         
         video.addEventListener('playing', () => {
-          this.verboseLog(`📺 Video ${index + 1} started playing - checking series`);
+          // Verbose debug log removed
           setTimeout(() => {
             this.detectCurrentSeries();
           }, 1000);
@@ -598,7 +587,7 @@ class VideoPlayerSkipper {
         // Source changes indicate new episodes
         video.addEventListener('canplay', () => {
           if (video.src && video.src !== video.dataset.lastSrc) {
-            this.verboseLog(`📺 Video ${index + 1} source changed: ${video.dataset.lastSrc} -> ${video.src}`);
+            // Verbose debug log removed
             video.dataset.lastSrc = video.src;
             setTimeout(() => {
               this.detectCurrentSeries();
@@ -625,7 +614,7 @@ class VideoPlayerSkipper {
       });
       
       if (newVideoAdded) {
-        this.verboseLog(`📺 New video element detected in DOM`);
+        // Verbose debug log removed
         setTimeout(checkVideoEvents, 500);
       }
     });
@@ -641,7 +630,7 @@ class VideoPlayerSkipper {
   handleUrlChange() {
     const currentUrl = window.location.href;
     if (currentUrl !== this.lastUrl) {
-      this.verboseLog(`🔗 URL changed from ${this.lastUrl} to ${currentUrl}`);
+      // Verbose debug log removed
       this.lastUrl = currentUrl;
       
       // Don't immediately clear series - let detection validate it
@@ -649,7 +638,7 @@ class VideoPlayerSkipper {
       const isNowOnContentPage = this.isUrlContentPage(currentUrl);
       
       if (isNowOnContentPage && (!this.currentSeries || wasOnContentPage !== isNowOnContentPage)) {
-        this.verboseLog(`🔄 URL change to content page - updating check interval`);
+        // Verbose debug log removed
         this.updateSeriesCheckInterval();
       }
       
@@ -707,7 +696,7 @@ class VideoPlayerSkipper {
     
     // Clear series when just browsing
     if (isOnBrowsePage && this.currentSeries) {
-      this.verboseLog('📋 On browse page - clearing current series');
+      // Verbose debug log removed
       this.currentSeries = null;
       this.updateSeriesCheckInterval();
       return;
@@ -718,7 +707,7 @@ class VideoPlayerSkipper {
     
     if (!this.currentSeries && newSeries) {
       seriesChanged = true;
-      this.verboseLog('🆕 New series detected');
+      // Verbose debug log removed
     } else if (this.currentSeries && !newSeries) {
       // Conservative approach: only clear if definitely not on content page
       const isOnVideoPage = window.location.href.includes('/watch/') && 
@@ -729,15 +718,15 @@ class VideoPlayerSkipper {
       
       if (!isOnVideoPage && !isOnTitlePage) {
         seriesChanged = true;
-        this.verboseLog('📤 Left series content (not on video or title page anymore)');
+        // Verbose debug log removed');
       } else if (isOnTitlePage && this.currentSeries) {
         seriesChanged = true;
-        this.verboseLog('� On title page - clearing episode info');
+        // Verbose debug log removed
       } else if (isOnVideoPage) {
-        this.verboseLog(`⚠️ Series detection failed but still on video page - keeping existing series: "${this.currentSeries.title}"`);
+        // Verbose debug log removed
         return; 
       } else {
-        this.verboseLog(`⚠️ Series detection failed - keeping existing series: "${this.currentSeries.title}"`);
+        // Verbose debug log removed
         return;
       }
     } else if (this.currentSeries && newSeries) {
@@ -747,17 +736,17 @@ class VideoPlayerSkipper {
       const sourceChanged = newSeries.source !== this.currentSeries.source;
       
       if (titleChanged) {
-        this.verboseLog(`📺 Series title changed: "${this.currentSeries.title}" → "${newSeries.title}"`);
+        // Verbose debug log removed
         seriesChanged = true;
       }
       
       if (episodeChanged) {
-        this.verboseLog(`📼 Episode changed: "${this.currentSeries.episode}" → "${newSeries.episode}"`);
+        // Verbose debug log removed
         seriesChanged = true;
       }
       
       if (sourceChanged) {
-        this.verboseLog(`🔄 Source changed: "${this.currentSeries.source}" → "${newSeries.source}"`);
+        // Verbose debug log removed
         seriesChanged = true;
       }
     }
@@ -772,7 +761,7 @@ class VideoPlayerSkipper {
           episode: 'browsing',
           source: this.currentSeries.source
         };
-        this.verboseLog(`📋 Created browsing version for title page: "${newSeries.title}"`);
+        // Verbose debug log removed
       }
       
       this.currentSeries = newSeries;
@@ -780,7 +769,7 @@ class VideoPlayerSkipper {
       this.updateSeriesCheckInterval();
       
       if (newSeries) {
-        this.log(`🎬 Series updated: ${newSeries.title} - Episode ${newSeries.episode} (${newSeries.source})`);
+        // Debug log removed`);
         
         // Notify background script
         chrome.runtime.sendMessage({
@@ -789,7 +778,7 @@ class VideoPlayerSkipper {
           previousSeries: previousSeries,
           domain: this.domain
         }).catch(error => {
-          this.verboseLog('Error notifying background script:', error);
+          // Verbose debug log removed
         });
         
         // Auto-create default settings for new series
@@ -802,29 +791,29 @@ class VideoPlayerSkipper {
             skipAds: true,
             autoNext: false
           };
-          this.verboseLog(`💾 Auto-created settings for new series: ${seriesKey}`);
+          // Verbose debug log removed
           this.saveSettings();
         } else {
-          this.verboseLog(`✅ Using existing settings for series: ${seriesKey}`);
+          // Verbose debug log removed
         }
         
         const currentSettings = this.getCurrentSeriesSettings();
-        this.verboseLog(`⚙️  Current settings for "${newSeries.title}":`, currentSettings);
+        // Verbose debug log removed
       } else {
-        this.log('📤 No series content detected');
+        // Debug log removed
       }
     } else if (newSeries) {
       // Reduce log spam for unchanged series
       if (Math.random() < 0.1) {
-        this.verboseLog(`🔄 Series confirmed: ${newSeries.title} - Episode ${newSeries.episode}`);
+        // Verbose debug log removed
       }
     } else if (this.currentSeries) {
       if (Math.random() < 0.05) {
-        this.verboseLog(`⚠️ Series detection failed but keeping existing: "${this.currentSeries.title}"`);
+        // Verbose debug log removed
       }
     } else {
       if (Math.random() < 0.05) {
-        this.verboseLog(`🔍 Still searching for series on ${this.domain}...`);
+        // Verbose debug log removed
       }
     }
   }
@@ -852,7 +841,7 @@ class VideoPlayerSkipper {
         return this.extractGenericSeries();
       }
     } catch (error) {
-      this.verboseLog('Error extracting series info:', error);
+      // Verbose debug log removed
       return null;
     }
   }
@@ -872,22 +861,22 @@ class VideoPlayerSkipper {
     const hasVideo = document.querySelector('video') !== null;
     
     if (isBrowsePage) {
-      this.verboseLog('📋 On Netflix browse page - skipping series detection');
+      // Verbose debug log removed
       return null;
     }
     
-    this.verboseLog(`📍 Netflix page type: watch=${isWatchPage}, title=${isTitlePage}, browse=${isBrowsePage}, hasVideo=${hasVideo}`);
+    // Verbose debug log removed
     
     // Smart extraction from video-title structure
     const videoTitleElement = document.querySelector('[data-uia="video-title"]');
     if (videoTitleElement) {
-      this.verboseLog(`📺 Found video-title element: analyzing structure...`);
+      // Verbose debug log removed
       
       // Look for h4 (series title) inside video-title
       const h4Element = videoTitleElement.querySelector('h4');
       if (h4Element?.textContent?.trim()) {
         const candidateTitle = h4Element.textContent.trim();
-        this.verboseLog(`✅ Found series title in h4: "${candidateTitle}"`);
+        // Verbose debug log removed
         
         // Basic validation for series title
         if (candidateTitle.length > 2 && !/^\d+$/.test(candidateTitle)) {
@@ -906,7 +895,7 @@ class VideoPlayerSkipper {
             
             if (episodeInfo.length > 0) {
               episode = episodeInfo.join(' - ');
-              this.verboseLog(`📺 Extracted episode from spans: "${episode}"`);
+              // Verbose debug log removed
             }
           }
         }
@@ -930,7 +919,7 @@ class VideoPlayerSkipper {
         const element = document.querySelector(selector);
         if (element?.textContent?.trim()) {
           const candidateTitle = element.textContent.trim();
-          this.verboseLog(`📺 Found title candidate with ${selector}: "${candidateTitle}"`);
+          // Verbose debug log removed
           
           // Filter out episode-like titles
           const episodePattern = /^(Episode|E)\s*\d+|^\d+\.\s|^S\d+E\d+|^\d+:\s|^Folge\s*\d+|^Flg\.\s*\d+|^Teil\s*\d+|^Chapter\s*\d+|^Kapitel\s*\d+/i;
@@ -942,13 +931,13 @@ class VideoPlayerSkipper {
               !mixedEpisodePattern.test(candidateTitle)) {
             if (candidateTitle.length > 2 && !/^\d+$/.test(candidateTitle)) {
               title = candidateTitle;
-              this.verboseLog(`✅ Using as series title: "${title}"`);
+              // Verbose debug log removed
               break;
             } else {
-              this.verboseLog(`❌ Rejected (too short or just number): "${candidateTitle}"`);
+              // Verbose debug log removed: "${candidateTitle}"`);
             }
           } else {
-            this.verboseLog(`❌ Rejected (contains episode info): "${candidateTitle}"`);
+            // Verbose debug log removed: "${candidateTitle}"`);
           }
         }
       }
@@ -978,19 +967,19 @@ class VideoPlayerSkipper {
           
           if (candidateEpisode.length > 0) {
             episode = candidateEpisode;
-            this.verboseLog(`📺 Found episode info: "${episode}"`);
+            // Verbose debug log removed
             break;
           }
         }
       }
     } else if (isTitlePage) {
       episode = 'browsing';
-      this.verboseLog('📋 On title page - setting episode to "browsing"');
+      // Verbose debug log removed
     }
     
     // Fallback to document title with aggressive cleaning
     if (!title) {
-      this.verboseLog('🔍 No series title found, trying document title...');
+      // Verbose debug log removed
       const docTitle = document.title?.replace(' - Netflix', '').replace(' | Netflix', '').trim();
       
       if (docTitle && docTitle !== 'Netflix' && docTitle.length > 0) {
@@ -1013,7 +1002,7 @@ class VideoPlayerSkipper {
           const episodeMatch = docTitle.match(/(?:Episode|Folge|Teil|Chapter)\s*(\d+[^-]*)/i);
           if (episodeMatch) {
             episode = episodeMatch[1].trim();
-            this.verboseLog(`📺 Extracted episode from title: "${episode}"`);
+            // Verbose debug log removed
           }
         }
         
@@ -1025,12 +1014,12 @@ class VideoPlayerSkipper {
             cleanedTitle.length > 2 &&
             !/^\d+$/.test(cleanedTitle)) {
           title = cleanedTitle;
-          this.verboseLog(`📺 Using cleaned document title: "${title}"`);
+          // Verbose debug log removed
         } else {
-          this.verboseLog(`❌ Document title too generic: "${cleanedTitle}"`);
+          // Verbose debug log removed
         }
       } else {
-        this.verboseLog(`❌ Document title unusable: "${docTitle}"`);
+        // Verbose debug log removed
       }
     }
     
@@ -1057,7 +1046,7 @@ class VideoPlayerSkipper {
       for (const pattern of episodePatterns) {
         const cleaned = title.replace(pattern, '').trim();
         if (cleaned.length > 2 && cleaned !== title) {
-          this.verboseLog(`🧹 Cleaned title: "${title}" -> "${cleaned}" (removed pattern: ${pattern})`);
+          // Verbose debug log removed`);
           title = cleaned;
           break;
         }
@@ -1068,7 +1057,7 @@ class VideoPlayerSkipper {
         const episodeEscaped = episode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const cleanedWithEpisode = title.replace(new RegExp(`\\s*[-:–—]\\s*${episodeEscaped}.*$`, 'i'), '').trim();
         if (cleanedWithEpisode !== title && cleanedWithEpisode.length > 2) {
-          this.verboseLog(`🧹 Removed episode "${episode}" from title: "${title}" -> "${cleanedWithEpisode}"`);
+          // Verbose debug log removed
           title = cleanedWithEpisode;
         }
       }
@@ -1076,13 +1065,13 @@ class VideoPlayerSkipper {
       title = title.replace(/\s+/g, ' ').trim();
       
       if (originalTitle !== title) {
-        this.verboseLog(`✨ Final title cleanup: "${originalTitle}" -> "${title}"`);
+        // Verbose debug log removed
       }
     }
     
     // URL-based detection fallback
     if (!title) {
-      this.verboseLog('🔍 Trying URL-based detection...');
+      // Verbose debug log removed
       
       const url = window.location.href;
       const titleMatch = url.match(/\/title\/(\d+)/);
@@ -1105,7 +1094,7 @@ class VideoPlayerSkipper {
               !content.includes('Episode ') &&
               content.length > 2) {
             title = content.replace(' - Netflix', '').replace(' | Netflix', '').trim();
-            this.verboseLog(`✅ Found title from ${selector}: "${title}"`);
+            // Verbose debug log removed
             break;
           }
         }
@@ -1129,7 +1118,7 @@ class VideoPlayerSkipper {
       );
       
       if (isGeneric || title.length < 2) {
-        this.verboseLog(`❌ Final validation failed: "${title}" is too generic or short`);
+        // Verbose debug log removed
         return null;
       }
       
@@ -1143,7 +1132,7 @@ class VideoPlayerSkipper {
         }
       }
       
-      this.verboseLog(`🎬 Netflix series detected: "${title}", Episode: "${episode}"`);
+      // Verbose debug log removed
       return { title, episode: episode || 'unknown', source: 'netflix' };
     }
     
@@ -1154,12 +1143,12 @@ class VideoPlayerSkipper {
                              document.querySelector('video') !== null;
       
       if (isOnNetflixPage && isWatchPage) {
-        this.verboseLog(`🔄 Keeping existing Netflix series: "${this.currentSeries.title}" (still on watch page)`);
+        // Verbose debug log removed`);
         return this.currentSeries;
       }
     }
     
-    this.verboseLog(`❌ Netflix series detection completely failed - no valid title found`);
+    // Verbose debug log removed
     return null;
   }
 
@@ -1195,11 +1184,11 @@ class VideoPlayerSkipper {
     if (!episode) episode = document.querySelector('.episode-title')?.textContent?.trim();
     
     if (title) {
-      this.verboseLog(`🎬 Disney+ series detected: "${title}", Episode: "${episode || 'unknown'}"`);
+      // Verbose debug log removed
       return { title, episode: episode || 'unknown', source: 'disney+' };
     }
     
-    this.verboseLog(`❌ Disney+ series detection failed`);
+    // Verbose debug log removed
     return null;
   }
 
@@ -1234,11 +1223,11 @@ class VideoPlayerSkipper {
     if (!episode) episode = document.querySelector('[data-testid="episode-title"]')?.textContent?.trim();
     
     if (title) {
-      this.verboseLog(`🎬 Prime Video series detected: "${title}", Episode: "${episode || 'unknown'}"`);
+      // Verbose debug log removed
       return { title, episode: episode || 'unknown', source: 'prime' };
     }
     
-    this.verboseLog(`❌ Prime Video series detection failed`);
+    // Verbose debug log removed
     return null;
   }
 
@@ -1296,7 +1285,6 @@ class VideoPlayerSkipper {
   async saveSettings() {
     try {
       if (!this.settings || typeof this.settings !== 'object') {
-        console.error('Invalid settings structure, skipping save');
         return;
       }
       
@@ -1309,14 +1297,13 @@ class VideoPlayerSkipper {
       
       try {
         await chrome.storage.sync.set({ skipperSettings: validSettings });
-        this.verboseLog('Settings saved to sync storage');
+        // Verbose debug log removed
       } catch (syncError) {
-        console.warn('Sync storage failed, using local storage:', syncError);
         await chrome.storage.local.set({ skipperSettings: validSettings });
-        this.verboseLog('Settings saved to local storage as fallback');
+        // Verbose debug log removed
       }
     } catch (error) {
-      console.error('Error saving settings:', error);
+      // Error saving settings - silently fail
     }
   }
 
@@ -1325,20 +1312,12 @@ class VideoPlayerSkipper {
     switch (request.action) {
       case 'detectSeries':
         // Force-refresh detection when popup requests it (bypass cache)
-        this.log('🔄 Force-refresh der Serie-Erkennung angefordert...');
         this.lastSeriesDetection = 0; // Reset cache
         this.lastDetectionUrl = null;
         this.lastDomStateHash = null;
         
         // Force immediate detection
         this.detectCurrentSeries();
-        
-        // Log the newly detected series after force-refresh
-        if (this.currentSeries) {
-          this.log(`✅ Nach Force-Refresh erkannt: ${this.currentSeries.title} - Episode ${this.currentSeries.episode} (${this.currentSeries.source})`);
-        } else {
-          this.log('❌ Nach Force-Refresh keine Serie erkannt');
-        }
         
         sendResponse({ series: this.currentSeries });
         break;
@@ -1380,7 +1359,7 @@ class VideoPlayerSkipper {
   start() {
     if (!this.isEnabled) return;
     
-    this.log('Starting Smart Skip');
+    // Debug log removed
     
     // Set up MutationObserver
     this.observer = new MutationObserver(() => {
@@ -1404,7 +1383,7 @@ class VideoPlayerSkipper {
   }
   
   stop() {
-    this.log('Stopping Smart Skip');
+    // Debug log removed
     
     if (this.observer) {
       this.observer.disconnect();
@@ -1448,7 +1427,7 @@ class VideoPlayerSkipper {
       return;
     }
     
-    this.verboseLog('Scanning for skip buttons...');
+    // Verbose debug log removed
     
     const seriesSettings = this.getCurrentSeriesSettings();
     
@@ -1494,15 +1473,15 @@ class VideoPlayerSkipper {
       const seriesKey = `${this.domain}:${this.currentSeries.title}`;
       const settings = this.settings.series[seriesKey];
       
-      this.verboseLog(`🔍 Getting settings for series: "${this.currentSeries.title}"`);
-      this.verboseLog(`📋 Series Key: "${seriesKey}"`);
-      this.verboseLog(`⚙️  Current settings:`, settings);
+      // Verbose debug log removed
+      // Verbose debug log removed
+      // Verbose debug log removed
       
       if (settings) {
-        this.verboseLog(`✅ Using custom settings for series`);
+        // Verbose debug log removed
         return settings;
       } else {
-        this.verboseLog(`⚠️ No custom settings found for series, using default series settings`);
+        // Verbose debug log removed
         // Default settings for detected but unconfigured series
         return {
           skipIntro: true,
@@ -1514,7 +1493,7 @@ class VideoPlayerSkipper {
       }
     }
     
-    this.verboseLog(`❌ No current series detected - using conservative fallback settings`);
+    // Verbose debug log removed
     // Conservative settings when no series context available
     return {
       skipIntro: false,
@@ -1535,12 +1514,12 @@ class VideoPlayerSkipper {
     
     // Special check for "Abspann ansehen" - this is a WATCH button, not a SKIP button
     if (text.includes('abspann') && text.includes('ansehen')) {
-      this.verboseLog(`❌ Detected "Abspann ansehen" (watch credits) button, not a skip button: "${text}"`);
+      // Verbose debug log removed button, not a skip button: "${text}"`);
       return 'watch'; // This should NOT be clicked
     }
     
     if (isWatchButton) {
-      this.verboseLog(`❌ Detected watch/view button, not a skip button: "${text}"`);
+      // Verbose debug log removed
       return 'watch'; // Special type for watch buttons that we should never click for skipping
     }
     
@@ -1583,7 +1562,7 @@ class VideoPlayerSkipper {
       if (ariaLabel.includes('next') || ariaLabel.includes('continue')) return 'next';
     }
     
-    this.verboseLog(`❓ Could not determine button type for selector "${selector}", text "${text}", aria-label "${ariaLabel}"`);
+    // Verbose debug log removed
     return 'unknown';
   }
   
@@ -1625,23 +1604,23 @@ class VideoPlayerSkipper {
       case 'watch':
         // NEVER click watch/view buttons - they're for viewing content, not skipping
         shouldSkip = false;
-        this.verboseLog(`❌ Watch/view button detected - never clicking these for skipping`);
+        // Verbose debug log removed
         break;
       default:
         // Conservative handling of unknown buttons
         if (this.currentSeries && this.currentSeries.title) {
           shouldSkip = seriesSettings.skipAds; // Use ad setting for unknown on known series
-          this.verboseLog(`⚠️ Unknown button type "${buttonType}" - using skipAds setting (${shouldSkip}) for known series`);
+          // Verbose debug log removed for known series`);
         } else {
           shouldSkip = false; // Don't skip unknown buttons without series context
-          this.verboseLog(`❌ Unknown button type "${buttonType}" - not skipping (no series detected)`);
+          // Verbose debug log removed`);
         }
         break;
     }
     
     const currentSeries = this.currentSeries?.title || 'No series detected';
-    this.verboseLog(`🤔 Should skip "${buttonType}" for "${currentSeries}"? ${shouldSkip ? '✅ YES' : '❌ NO'}`);
-    this.verboseLog(`📊 Settings: skipIntro=${seriesSettings.skipIntro}, skipRecap=${seriesSettings.skipRecap}, skipCredits=${seriesSettings.skipCredits}, skipAds=${seriesSettings.skipAds}, autoNext=${seriesSettings.autoNext}`);
+    // Verbose debug log removed
+    // Verbose debug log removed
     
     return shouldSkip;
   }
@@ -1666,10 +1645,10 @@ class VideoPlayerSkipper {
       }
       
       if (hasCountdown || nearEnd) {
-        this.verboseLog('Found Netflix auto-advance popup with countdown or near video end');
+        // Verbose debug log removed
         this.clickButton(seamlessButton, 'Netflix auto-advance popup');
       } else {
-        this.verboseLog('Found seamless button but no countdown and not near end - ignoring');
+        // Verbose debug log removed
       }
     }
   }
@@ -1746,7 +1725,7 @@ class VideoPlayerSkipper {
       );
       
       if (hasPopupIndicator) {
-        this.verboseLog(`Found next episode button in popup context: ${parentClass} ${parentId}`);
+        // Verbose debug log removed
         return true;
       }
       
@@ -1754,14 +1733,14 @@ class VideoPlayerSkipper {
       if (parentClass.includes('watch-video--') || 
           parentClass.includes('next-episode') ||
           parent.querySelector('[data-uia="next-episode-seamless-button"]')) {
-        this.verboseLog('Found Netflix auto-advance overlay');
+        // Verbose debug log removed
         return true;
       }
       
       // Countdown timer indicates auto-advance
       const hasCountdown = parent.querySelector('[class*="countdown"], [class*="timer"], [class*="seconds"]');
       if (hasCountdown) {
-        this.verboseLog('Found countdown timer - likely auto-advance popup');
+        // Verbose debug log removed
         return true;
       }
       
@@ -1776,15 +1755,15 @@ class VideoPlayerSkipper {
       const timeLeft = video.duration - video.currentTime;
       
       if (progress > 0.9 || timeLeft < 120) { // Last 10% or 2 minutes
-        this.verboseLog(`Video near end (${Math.round(progress * 100)}% complete, ${Math.round(timeLeft)}s left) - allowing next episode`);
+        // Verbose debug log removed}% complete, ${Math.round(timeLeft)}s left) - allowing next episode`);
         return true;
       } else {
-        this.verboseLog(`Video not near end (${Math.round(progress * 100)}% complete, ${Math.round(timeLeft)}s left) - blocking next episode`);
+        // Verbose debug log removed}% complete, ${Math.round(timeLeft)}s left) - blocking next episode`);
         return false;
       }
     }
     
-    this.verboseLog('Next episode button found but not in auto-advance context - blocking');
+    // Verbose debug log removed
     return false;
   }
   
@@ -1850,7 +1829,7 @@ class VideoPlayerSkipper {
    */
   async clickButton(button, reason) {
     try {
-      this.log(`Clicking button: ${this.getElementText(button)} (${reason})`);
+      // Debug log removed} (${reason})`);
       
       // Prevent rapid repeated clicks on same button
       button.dataset.skipperClicked = Date.now().toString();
@@ -1880,7 +1859,7 @@ class VideoPlayerSkipper {
         button.onclick();
       }
       
-      this.verboseLog(`Successfully clicked button: ${this.getElementText(button)}`);
+      // Verbose debug log removed}`);
       
       // Notify background script for statistics/debugging
       chrome.runtime.sendMessage({
@@ -1889,11 +1868,11 @@ class VideoPlayerSkipper {
         domain: this.domain,
         reason: reason
       }).catch(error => {
-        this.verboseLog('Error notifying background script:', error);
+        // Verbose debug log removed
       });
       
     } catch (error) {
-      console.error('Error clicking button:', error);
+      // Error clicking button - silently fail
     }
   }
   
@@ -1937,21 +1916,19 @@ class VideoPlayerSkipper {
   //   this.buttonPatterns = this.generateButtonPatterns();
   //   
   //   if (oldLanguage !== this.detectedLanguage) {
-  //     this.log(`Language changed from ${oldLanguage} to ${this.detectedLanguage}`);
-  //     this.verboseLog(`Refreshed patterns: ${this.buttonPatterns.textPatterns.length} text patterns`);
+  //     // Debug log removed
+  //     // Verbose debug log removed
   //   }
   //   
   //   return this.detectedLanguage;
   // }
   
   log(message) {
-    console.log(`[Smart Skip] ${message}`);
+    // Logging disabled for production
   }
   
   verboseLog(message) {
-    if (this.verboseLogging) {
-      console.log(`[Smart Skip - Verbose] ${message}`);
-    }
+    // Verbose logging disabled for production
   }
   
   // === LANGUAGE DETECTION AND MULTI-LANGUAGE SUPPORT ===
@@ -2176,8 +2153,8 @@ class VideoPlayerSkipper {
       '.skip-ad-button'
     ];
     
-    this.verboseLog(`Generated patterns for language: ${detectedLang}`);
-    this.verboseLog(`Total text patterns: ${basePatterns.textPatterns.length}`);
+    // Verbose debug log removed
+    // Verbose debug log removed
     
     return basePatterns;
   }

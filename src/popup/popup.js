@@ -17,7 +17,6 @@ class PopupManager {
   async init() {
     // Initialize language first
     await this.languageManager.initialize();
-    console.log('LanguageManager initialized, current language:', this.languageManager.currentLanguage);
     
     await this.loadSettings();
     await this.detectCurrentContext();
@@ -27,12 +26,10 @@ class PopupManager {
     
     // Apply initial translations after everything is set up
     this.applyTranslations();
-    console.log('Popup initialization complete');
   }
 
   async loadSettings() {
     try {
-      console.log('🔍 Loading settings...');
       let loadedSettings = null;
       let loadMethod = '';
       
@@ -43,11 +40,10 @@ class PopupManager {
           if (result.skipperSettings) {
             loadedSettings = result.skipperSettings;
             loadMethod = 'Sync Storage ☁️';
-            console.log('✅ Settings loaded from sync storage');
           }
         }
       } catch (syncError) {
-        console.warn('⚠️ Sync storage failed:', syncError.message);
+        // Sync storage failed, try local storage
       }
       
       // Method 2: Try local storage if sync failed
@@ -58,11 +54,10 @@ class PopupManager {
             if (result.skipperSettings) {
               loadedSettings = result.skipperSettings;
               loadMethod = 'Local Storage 💾';
-              console.log('✅ Settings loaded from local storage');
             }
           }
         } catch (localError) {
-          console.warn('⚠️ Local storage failed:', localError.message);
+          // Local storage failed, try localStorage
         }
       }
       
@@ -73,10 +68,9 @@ class PopupManager {
           if (storedSettings) {
             loadedSettings = JSON.parse(storedSettings);
             loadMethod = 'Browser Storage 🔄';
-            console.log('✅ Settings loaded from localStorage (temporary extension mode)');
           }
         } catch (lsError) {
-          console.warn('⚠️ localStorage failed:', lsError.message);
+          // localStorage failed
         }
       }
       
@@ -84,7 +78,6 @@ class PopupManager {
       if (!loadedSettings && window.skipperSettings) {
         loadedSettings = window.skipperSettings;
         loadMethod = 'Memory 🧠';
-        console.log('✅ Settings loaded from memory');
       }
       
       if (loadedSettings) {
@@ -94,17 +87,13 @@ class PopupManager {
           domains: loadedSettings.domains || {},
           series: loadedSettings.series || {}
         };
-        console.log(`✅ Settings loaded successfully from ${loadMethod}:`, this.settings);
-        this.showStatus(`Einstellungen geladen (${loadMethod})`, 'success');
+        // Settings loaded successfully - no need to show status
       } else {
-        console.log('📝 No settings found, using defaults');
-        this.showStatus('Standard-Einstellungen geladen', 'info');
         // Initialize with defaults and save
         await this.saveSettings();
       }
     } catch (error) {
-      console.error('❌ Error loading settings:', error);
-      this.showStatus('Fehler beim Laden der Einstellungen', 'error');
+      this.showStatus('Einstellungen konnten nicht geladen werden', 'error');
       
       // Use safe defaults
       this.settings = {
@@ -129,9 +118,6 @@ class PopupManager {
         series: this.settings.series || {}
       };
       
-      console.log('💾 Attempting to save settings:', validSettings);
-      this.showStatus('Speichere...', 'info');
-      
       let saveSuccess = false;
       let saveMethod = '';
       
@@ -141,12 +127,10 @@ class PopupManager {
           await chrome.storage.sync.set({ skipperSettings: validSettings });
           saveSuccess = true;
           saveMethod = 'Sync Storage ☁️';
-          console.log('✅ Settings saved to sync storage');
         } else {
           throw new Error('Sync storage not available');
         }
       } catch (syncError) {
-        console.warn('⚠️ Sync storage failed:', syncError.message);
         
         // Method 2: Try chrome.storage.local
         try {
@@ -154,12 +138,11 @@ class PopupManager {
             await chrome.storage.local.set({ skipperSettings: validSettings });
             saveSuccess = true;
             saveMethod = 'Local Storage 💾';
-            console.log('✅ Settings saved to local storage');
           } else {
             throw new Error('Local storage not available');
           }
         } catch (localError) {
-          console.warn('⚠️ Local storage failed:', localError.message);
+          // Local storage failed
         }
       }
       
@@ -171,9 +154,8 @@ class PopupManager {
           localStorage.setItem('skipperSettingsTimestamp', Date.now().toString());
           saveSuccess = true;
           saveMethod = 'Browser Storage 🔄';
-          console.log('✅ Settings saved to localStorage (temporary extension mode)');
         } catch (lsError) {
-          console.error('❌ localStorage failed:', lsError.message);
+          // localStorage failed
         }
       }
       
@@ -182,38 +164,27 @@ class PopupManager {
         window.skipperSettings = validSettings;
         saveSuccess = true;
         saveMethod = 'Memory 🧠 (Session nur)';
-        console.log('⚠️ Settings saved to memory only (will be lost on page refresh)');
       }
       
       // Show result to user
       if (saveSuccess) {
-        this.showStatus(`✅ Gespeichert (${saveMethod})`, 'success');
-        
-        // Add explanation for temporary extension limitations
+        // Only show success message for user-initiated saves, not automatic ones
         if (saveMethod.includes('Browser Storage') || saveMethod.includes('Memory')) {
-          const statusEl = document.querySelector('.status');
-          if (statusEl && !statusEl.querySelector('.temp-extension-info')) {
-            const info = document.createElement('div');
-            info.className = 'temp-extension-info';
-            info.innerHTML = `
-              <small style="color: #666; display: block; margin-top: 5px;">
-                💡 <strong>Temporäre Extension:</strong> Einstellungen gehen beim Browser-Neustart verloren.<br>
-                Für persistente Speicherung Extension permanent installieren.
-              </small>
-            `;
-            statusEl.appendChild(info);
-          }
+          this.showStatus('⚠️ Temporäre Speicherung', 'warning');
         }
+        // For normal chrome storage, don't show any message as it's expected behavior
         
         // Notify content script about settings change
         this.notifyContentScript();
       } else {
-        this.showStatus('❌ Speichern komplett fehlgeschlagen', 'error');
+        this.showStatus('❌ Speichern fehlgeschlagen', 'error');
       }
       
     } catch (error) {
-      console.error('❌ Critical error in saveSettings:', error);
-      this.showStatus(`❌ Kritischer Fehler: ${error.message}`, 'error');
+      // Only show critical errors to user
+      if (error.message.includes('Critical') || error.message.includes('structure')) {
+        this.showStatus('❌ Speicherfehler', 'error');
+      }
     }
   }
 
@@ -342,11 +313,11 @@ class PopupManager {
           this.updateCurrentSeriesUI();
         }
       } catch (error) {
-        console.log('Content script not ready yet:', error);
+        // Content script not ready yet
       }
 
     } catch (error) {
-      console.error('Error detecting context:', error);
+      // Error detecting context
     }
   }
 
@@ -443,8 +414,7 @@ class PopupManager {
         await this.saveSettings();
         await this.sendUpdateToContentScript();
       } catch (error) {
-        console.error('Error updating toggle:', error);
-        this.showStatus('Fehler beim Speichern der Einstellung', 'error');
+        this.showStatus('Einstellung konnte nicht gespeichert werden', 'error');
         
         // Revert toggle state
         if (newValue) {
@@ -474,8 +444,7 @@ class PopupManager {
           await this.saveSettings();
           await this.sendUpdateToContentScript();
         } catch (error) {
-          console.error('Error updating series setting:', error);
-          this.showStatus('Fehler beim Speichern der Serie-Einstellung', 'error');
+          this.showStatus('Serie-Einstellung konnte nicht gespeichert werden', 'error');
           // Revert checkbox state
           checkbox.checked = !checkbox.checked;
         }
@@ -493,7 +462,7 @@ class PopupManager {
         });
       }
     } catch (error) {
-      console.log('Content script not available:', error);
+      // Content script not available
     }
   }
 
@@ -507,7 +476,7 @@ class PopupManager {
         window.close();
       }
     } catch (error) {
-      this.showStatus('Fehler beim Neuladen', 'error');
+      this.showStatus('Seite konnte nicht neu geladen werden', 'error');
     }
   }
 
@@ -567,9 +536,6 @@ class PopupManager {
     statusEl.className = `status ${type}`;
     statusEl.classList.remove('hidden');
     
-    // Log for debugging
-    console.log(`[PopupManager] Status: ${translatedMessage} (${type})`);
-    
     setTimeout(() => {
       // Only hide if it's not permanent
       if (statusEl.getAttribute('data-permanent') !== 'true') {
@@ -622,20 +588,15 @@ class PopupManager {
   applyTranslations() {
     // Make sure languageManager is ready
     if (!this.languageManager) {
-      console.warn('LanguageManager not ready yet');
       return;
     }
     
     // Get all elements with data-i18n attribute
     const elements = document.querySelectorAll('[data-i18n]');
     
-    console.log(`Applying translations to ${elements.length} elements...`);
-    
     elements.forEach(element => {
       const key = element.getAttribute('data-i18n');
       const translation = this.languageManager.t(key);
-      
-      console.log(`Translating ${key} -> ${translation}`);
       
       if (element.tagName === 'OPTION') {
         element.textContent = translation;
@@ -719,10 +680,6 @@ class PopupManager {
       
       // Mark as permanent - no timeout to hide the message
       statusEl.setAttribute('data-permanent', 'true');
-      
-      console.log('Permanent unsupported message displayed');
-    } else {
-      console.warn('StatusEl or LanguageManager not available for unsupported message');
     }
   }
 }

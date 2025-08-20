@@ -7,15 +7,12 @@ const DEFAULT_SETTINGS = {
 
 // Initialize extension
 chrome.runtime.onInstalled.addListener(async (details) => {
-  console.log('Video Player Skipper installed/updated', details);
-  
   try {
     // Load existing settings or set defaults
     const result = await chrome.storage.sync.get(['skipperSettings']);
     
     if (!result.skipperSettings) {
       await chrome.storage.sync.set({ skipperSettings: DEFAULT_SETTINGS });
-      console.log('Default settings initialized');
     } else {
       // Migrate old settings if needed
       const settings = result.skipperSettings;
@@ -45,7 +42,6 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       
       if (needsUpdate) {
         await chrome.storage.sync.set({ skipperSettings: settings });
-        console.log('Settings migrated to new structure');
       }
     }
     
@@ -61,7 +57,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     }
     
   } catch (error) {
-    console.error('Error initializing extension:', error);
+    // Error initializing extension - silently fail
   }
 });
 
@@ -107,7 +103,6 @@ async function handleMessage(request, sender, sendResponse) {
         sendResponse({ error: 'Unknown action' });
     }
   } catch (error) {
-    console.error('Error handling message:', error);
     sendResponse({ error: error.message });
   }
 }
@@ -124,11 +119,8 @@ async function handleButtonClicked(request, sender) {
       message: `"${buttonText}" auf ${domain} übersprungen`,
     });
     
-    // Log for analytics (could be extended)
-    console.log(`Button clicked: ${buttonText} on ${domain}`);
-    
   } catch (error) {
-    console.error('Error showing notification:', error);
+    // Error showing notification - silently fail
   }
 }
 
@@ -153,8 +145,6 @@ async function handleSeriesDetected(request, sender) {
       
       await saveSettings(settings);
       
-      console.log(`New series detected and saved: ${series.title} on ${domain}`);
-      
       // Show notification for new series
       chrome.notifications.create({
         type: 'basic',
@@ -169,7 +159,7 @@ async function handleSeriesDetected(request, sender) {
     }
     
   } catch (error) {
-    console.error('Error handling series detection:', error);
+    // Error handling series detection - silently fail
   }
 }
 
@@ -179,7 +169,6 @@ async function getSettings() {
     let result = await chrome.storage.sync.get(['skipperSettings']);
     
     if (!result.skipperSettings) {
-      console.log('No sync settings found, trying local storage...');
       result = await chrome.storage.local.get(['skipperSettings']);
     }
     
@@ -197,7 +186,6 @@ async function getSettings() {
     // Return defaults if nothing found
     return DEFAULT_SETTINGS;
   } catch (error) {
-    console.error('Error getting settings:', error);
     return DEFAULT_SETTINGS;
   }
 }
@@ -219,14 +207,10 @@ async function saveSettings(settings) {
     // Try sync storage first
     try {
       await chrome.storage.sync.set({ skipperSettings: validSettings });
-      console.log('Settings saved to sync storage successfully');
     } catch (syncError) {
-      console.warn('Sync storage failed, using local storage:', syncError);
       await chrome.storage.local.set({ skipperSettings: validSettings });
-      console.log('Settings saved to local storage as fallback');
     }
   } catch (error) {
-    console.error('Error saving settings:', error);
     throw error;
   }
 }
@@ -242,10 +226,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     
     const url = new URL(tab.url);
     const isStreamingSite = streamingSites.some(site => url.hostname.includes(site));
-    
-    if (isStreamingSite) {
-      console.log(`Detected streaming site: ${url.hostname}`);
-    }
   }
 });
 
@@ -257,5 +237,3 @@ chrome.runtime.onStartup.addListener(() => {
     });
   });
 });
-
-console.log('Video Player Skipper background script loaded');
