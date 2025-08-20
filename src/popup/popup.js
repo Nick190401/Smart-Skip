@@ -3,6 +3,7 @@ class PopupManager {
   constructor() {
     this.currentDomain = '';
     this.currentSeries = null;
+    this.lastKnownUnsupportedState = null; // Track unsupported state to prevent flicker
     this.settings = {
       globalEnabled: true,
       domains: {},
@@ -16,6 +17,7 @@ class PopupManager {
   async init() {
     // Initialize language first
     await this.languageManager.initialize();
+    console.log('LanguageManager initialized, current language:', this.languageManager.currentLanguage);
     
     await this.loadSettings();
     await this.detectCurrentContext();
@@ -23,8 +25,9 @@ class PopupManager {
     this.updateUI();
     this.startPeriodicUpdates();
     
-    // Apply initial translations
+    // Apply initial translations after everything is set up
     this.applyTranslations();
+    console.log('Popup initialization complete');
   }
 
   async loadSettings() {
@@ -284,43 +287,42 @@ class PopupManager {
       });
       
       if (!isSupportedPlatform) {
-        // Enable compact mode
-        document.body.classList.add('compact-mode');
-        
-        // Show "not supported" message and hide most UI
-        document.getElementById('currentDomainName').textContent = this.currentDomain;
-        
-        // Hide series-specific sections
-        document.getElementById('currentSeriesSection').classList.add('hidden');
-        
-        // Hide domain-specific toggle (makes no sense on unsupported sites)
-        document.querySelector('.global-settings .setting-item:nth-of-type(2)').classList.add('hidden');
-        
-        // Show compact warning message
-        this.showStatus(`❌ ${this.currentDomain} wird nicht unterstützt`, 'error');
-        
-        // Show supported platforms info in status
-        const statusEl = document.querySelector('.status');
-        if (statusEl && !statusEl.querySelector('.supported-platforms')) {
-          setTimeout(() => {
-            statusEl.innerHTML = `
-              <div style="text-align: center;">
-                <strong>❌ Nicht unterstützte Website</strong><br>
-                <small style="opacity: 0.8; margin-top: 8px; display: block;">
-                  Diese Extension funktioniert nur auf:<br>
-                  🎬 Netflix, Disney+, Prime Video, YouTube<br>
-                  🎭 Crunchyroll, Hulu, Apple TV+, HBO Max<br>
-                  📺 und weiteren Streaming-Plattformen
-                </small>
-                <small style="opacity: 0.6; margin-top: 8px; display: block;">
-                  Gehe zu einer Streaming-Website, um die Extension zu nutzen
-                </small>
-              </div>
-            `;
-            statusEl.className = 'status error';
-          }, 100);
+        // Only update if state changed to prevent flicker
+        if (this.lastKnownUnsupportedState !== this.currentDomain) {
+          this.lastKnownUnsupportedState = this.currentDomain;
+          
+          // Enable compact mode
+          document.body.classList.add('compact-mode');
+          
+          // Show "not supported" message and hide most UI
+          document.getElementById('currentDomainName').textContent = this.currentDomain;
+          
+          // Hide series-specific sections
+          document.getElementById('currentSeriesSection').classList.add('hidden');
+          
+          // Hide domain-specific toggle (makes no sense on unsupported sites)
+          document.querySelector('.global-settings .setting-item:nth-of-type(2)').classList.add('hidden');
+          
+          // Show permanent warning message with translation - only set once
+          this.showPermanentUnsupportedMessage();
         }
+        // Always return early for unsupported sites to prevent any further updates
         return;
+      }
+      
+      // Reset unsupported state if we're now on a supported site
+      if (this.lastKnownUnsupportedState !== null) {
+        this.lastKnownUnsupportedState = null;
+        // Show series section again
+        document.getElementById('currentSeriesSection').classList.remove('hidden');
+        document.querySelector('.global-settings .setting-item:nth-of-type(2)').classList.remove('hidden');
+        
+        // Reset permanent status message
+        const statusEl = document.getElementById('statusMessage');
+        if (statusEl) {
+          statusEl.removeAttribute('data-permanent');
+          statusEl.classList.add('hidden');
+        }
       }
       
       // Remove compact mode if we're on a supported platform
@@ -540,14 +542,23 @@ class PopupManager {
   }
 
   startPeriodicUpdates() {
-    // Update series detection every 5 seconds
+    // Only update if we're on a supported platform to prevent flicker on unsupported sites
     setInterval(() => {
+      // Skip updates if we're on an unsupported site
+      if (this.lastKnownUnsupportedState !== null) {
+        return; // Don't update anything on unsupported sites
+      }
       this.detectCurrentContext();
-    }, 5000);
+    }, 10000);
   }
 
   showStatus(message, type) {
     const statusEl = document.getElementById('statusMessage');
+    
+    // Don't override permanent messages (like unsupported site warnings)
+    if (statusEl.getAttribute('data-permanent') === 'true') {
+      return;
+    }
     
     // Translate common status messages
     const translatedMessage = this.translateStatusMessage(message);
@@ -560,7 +571,10 @@ class PopupManager {
     console.log(`[PopupManager] Status: ${translatedMessage} (${type})`);
     
     setTimeout(() => {
-      statusEl.classList.add('hidden');
+      // Only hide if it's not permanent
+      if (statusEl.getAttribute('data-permanent') !== 'true') {
+        statusEl.classList.add('hidden');
+      }
     }, 3000);
   }
   
@@ -570,7 +584,9 @@ class PopupManager {
       'Settings saved': this.languageManager.t('settingsSaved'),
       'Einstellungen gespeichert': this.languageManager.t('settingsSaved'),
       'Save failed': this.languageManager.t('saveFailed'),
-      'Speichern fehlgeschlagen': this.languageManager.t('saveFailed')
+      'Speichern fehlgeschlagen': this.languageManager.t('saveFailed'),
+      'wird nicht unterstützt': this.languageManager.t('unsupportedSite'),
+      'not supported': this.languageManager.t('unsupportedSite')
     };
     
     // Check if we have a translation for this message
@@ -604,12 +620,22 @@ class PopupManager {
   }
   
   applyTranslations() {
+    // Make sure languageManager is ready
+    if (!this.languageManager) {
+      console.warn('LanguageManager not ready yet');
+      return;
+    }
+    
     // Get all elements with data-i18n attribute
     const elements = document.querySelectorAll('[data-i18n]');
+    
+    console.log(`Applying translations to ${elements.length} elements...`);
     
     elements.forEach(element => {
       const key = element.getAttribute('data-i18n');
       const translation = this.languageManager.t(key);
+      
+      console.log(`Translating ${key} -> ${translation}`);
       
       if (element.tagName === 'OPTION') {
         element.textContent = translation;
@@ -669,6 +695,34 @@ class PopupManager {
       if (noSeriesMsg) {
         noSeriesMsg.textContent = this.languageManager.t('noSeriesDetected');
       }
+    }
+  }
+  
+  showPermanentUnsupportedMessage() {
+    const statusEl = document.getElementById('statusMessage');
+    if (statusEl && this.languageManager) {
+      // Show the permanent error message without timeout to prevent flicker
+      statusEl.innerHTML = `
+        <div style="text-align: center;">
+          <strong>❌ ${this.languageManager.t('unsupportedSiteTitle')}</strong><br>
+          <small style="opacity: 0.8; margin-top: 8px; display: block;">
+            ${this.languageManager.t('unsupportedSiteDesc')}<br>
+            📺 ${this.languageManager.t('supportedPlatforms')}
+          </small>
+          <small style="opacity: 0.6; margin-top: 8px; display: block;">
+            ${this.languageManager.t('unsupportedSiteHint')}
+          </small>
+        </div>
+      `;
+      statusEl.className = 'status error';
+      statusEl.classList.remove('hidden');
+      
+      // Mark as permanent - no timeout to hide the message
+      statusEl.setAttribute('data-permanent', 'true');
+      
+      console.log('Permanent unsupported message displayed');
+    } else {
+      console.warn('StatusEl or LanguageManager not available for unsupported message');
     }
   }
 }

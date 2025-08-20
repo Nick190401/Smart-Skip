@@ -12,6 +12,10 @@ class LanguageManager {
         currentSeries: "Aktuelle Serie",
         noSeriesDetected: "Keine Serie erkannt",
         unsupportedSite: "Diese Website wird nicht unterstützt",
+        unsupportedSiteTitle: "Nicht unterstützte Website",
+        unsupportedSiteDesc: "Diese Extension funktioniert nur auf:",
+        unsupportedSiteHint: "Gehe zu einer Streaming-Website, um die Extension zu nutzen",
+        supportedPlatforms: "Netflix, Disney+, Prime Video, YouTube<br>🎭 Crunchyroll, Hulu, Apple TV+, HBO Max<br>📺 und weiteren Streaming-Plattformen",
         
         // Settings
         settingsTitle: "Einstellungen",
@@ -34,12 +38,14 @@ class LanguageManager {
         
         // Language Settings
         languageSettings: "Sprache",
+        languageSettingsDesc: "Interface-Sprache wählen",
         languageAuto: "Automatisch (Browser-Sprache)",
         languageGerman: "Deutsch",
         languageEnglish: "English",
         
         // Buttons
         saveSettings: "Einstellungen speichern",
+        reloadButton: "Neuladen",
         
         // Status Messages
         settingsSaved: "Einstellungen gespeichert",
@@ -72,6 +78,10 @@ class LanguageManager {
         currentSeries: "Current Series",
         noSeriesDetected: "No series detected",
         unsupportedSite: "This website is not supported",
+        unsupportedSiteTitle: "Unsupported Website",
+        unsupportedSiteDesc: "This extension only works on:",
+        unsupportedSiteHint: "Go to a streaming website to use the extension",
+        supportedPlatforms: "Netflix, Disney+, Prime Video, YouTube<br>🎭 Crunchyroll, Hulu, Apple TV+, HBO Max<br>📺 and other streaming platforms",
         
         // Settings
         settingsTitle: "Settings",
@@ -94,12 +104,14 @@ class LanguageManager {
         
         // Language Settings
         languageSettings: "Language",
+        languageSettingsDesc: "Choose interface language",
         languageAuto: "Auto (Browser Language)",
         languageGerman: "Deutsch",
         languageEnglish: "English",
         
         // Buttons
         saveSettings: "Save Settings",
+        reloadButton: "Reload",
         
         // Status Messages
         settingsSaved: "Settings saved",
