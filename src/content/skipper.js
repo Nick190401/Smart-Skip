@@ -1445,10 +1445,63 @@ class VideoPlayerSkipper {
     
     const seriesSettings = this.getCurrentSeriesSettings();
     
-    // Neue Logik: Wenn autoNext aktiv ist, nur "next" klicken. Wenn autoNext aus ist, immer "Abspann ansehen" klicken.
+    // Neue Logik: Bei autoNext=true nur next-Buttons, sonst alle erlaubten Skip-Buttons (intro, recap, credits, ads) und explizit watch-abspann.
     let clicked = false;
-    if (seriesSettings.autoNext) {
-      // Nur next-Buttons klicken
+    // Zuerst alle erlaubten Skip-Buttons (intro, recap, credits, ads, watch-abspann) klicken
+    // Zuerst explizit watch-abspann bevorzugen
+    for (const selector of this.buttonPatterns.selectors) {
+      const buttons = document.querySelectorAll(selector);
+      for (const button of buttons) {
+        const buttonType = this.getButtonType(button, selector);
+        if (buttonType === 'watch-abspann' && this.isButtonClickable(button)) {
+          this.clickButton(button, `selector: ${selector} (${buttonType})`);
+          clicked = true;
+          break;
+        }
+      }
+      if (clicked) break;
+    }
+    if (!clicked) {
+      // Jetzt alle anderen erlaubten Skip-Buttons (intro, recap, credits, ads)
+      for (const selector of this.buttonPatterns.selectors) {
+        const buttons = document.querySelectorAll(selector);
+        for (const button of buttons) {
+          const buttonType = this.getButtonType(button, selector);
+          if (['intro','recap','credits','ads'].includes(buttonType) && this.shouldSkipButtonType(buttonType, seriesSettings) && this.isButtonClickable(button)) {
+            this.clickButton(button, `selector: ${selector} (${buttonType})`);
+            clicked = true;
+            break;
+          }
+        }
+        if (clicked) break;
+      }
+    }
+    if (!clicked) {
+      // Textbasierte Suche für watch-abspann
+      const allButtons = document.querySelectorAll('button, [role="button"], a, div[onclick]');
+      for (const button of allButtons) {
+        const buttonType = this.getButtonTypeFromText(button);
+        if (buttonType === 'watch-abspann' && this.shouldClickButton(button)) {
+          this.clickButton(button, `text/aria pattern match (${buttonType})`);
+          clicked = true;
+          break;
+        }
+      }
+    }
+    if (!clicked) {
+      // Textbasierte Suche für andere erlaubte Skip-Buttons
+      const allButtons = document.querySelectorAll('button, [role="button"], a, div[onclick]');
+      for (const button of allButtons) {
+        const buttonType = this.getButtonTypeFromText(button);
+        if (['intro','recap','credits','ads'].includes(buttonType) && this.shouldSkipButtonType(buttonType, seriesSettings) && this.shouldClickButton(button)) {
+          this.clickButton(button, `text/aria pattern match (${buttonType})`);
+          clicked = true;
+          break;
+        }
+      }
+    }
+    // Wenn autoNext aktiv ist, zusätzlich next-Buttons klicken
+    if (seriesSettings.autoNext && !clicked) {
       for (const selector of this.buttonPatterns.selectors) {
         const buttons = document.querySelectorAll(selector);
         for (const button of buttons) {
@@ -1474,31 +1527,6 @@ class VideoPlayerSkipper {
       }
       // Special handling for auto-advance popups
       this.checkForAutoAdvancePopup();
-    } else {
-      // autoNext ist aus: Immer "Abspann ansehen" klicken (watch-abspann)
-      for (const selector of this.buttonPatterns.selectors) {
-        const buttons = document.querySelectorAll(selector);
-        for (const button of buttons) {
-          const buttonType = this.getButtonType(button, selector);
-          if (buttonType === 'watch-abspann' && this.isButtonClickable(button)) {
-            this.clickButton(button, `selector: ${selector} (${buttonType})`);
-            clicked = true;
-            break;
-          }
-        }
-        if (clicked) break;
-      }
-      if (!clicked) {
-        const allButtons = document.querySelectorAll('button, [role="button"], a, div[onclick]');
-        for (const button of allButtons) {
-          const buttonType = this.getButtonTypeFromText(button);
-          if (buttonType === 'watch-abspann' && this.shouldClickButton(button)) {
-            this.clickButton(button, `text/aria pattern match (${buttonType})`);
-            clicked = true;
-            break;
-          }
-        }
-      }
     }
   }
   
