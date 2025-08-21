@@ -1245,11 +1245,25 @@ class VideoPlayerSkipper {
   extractCrunchyrollSeries() {
     let title = document.querySelector('[data-t="series-title"]')?.textContent?.trim();
     if (!title) title = document.querySelector('.series-title')?.textContent?.trim();
+    // Add support for Crunchyroll's h4 series title
+    if (!title) {
+      const h4 = document.querySelector('h4.text--gq6o-.text--is-fixed-size--5i4oU.text--is-semibold--AHOYN.text--is-l--iccTo');
+      if (h4 && h4.textContent) {
+        title = h4.textContent.trim();
+      }
+    }
     if (!title) title = document.title?.replace(' - Crunchyroll', '').trim();
-    
+
     let episode = document.querySelector('[data-t="episode-title"]')?.textContent?.trim();
     if (!episode) episode = document.querySelector('.episode-title')?.textContent?.trim();
-    
+    // Add support for Crunchyroll's h1 episode title
+    if (!episode) {
+      const h1 = document.querySelector('h1.heading--nKNOf.heading--is-xs--UyvXH.heading--is-family-type-one--GqBzU.title');
+      if (h1 && h1.textContent) {
+        episode = h1.textContent.trim();
+      }
+    }
+
     if (title) {
       return { title, episode: episode || 'unknown', source: 'crunchyroll' };
     }
@@ -1431,36 +1445,60 @@ class VideoPlayerSkipper {
     
     const seriesSettings = this.getCurrentSeriesSettings();
     
-    // Try platform-specific selectors first (more reliable)
-    for (const selector of this.buttonPatterns.selectors) {
-      const buttons = document.querySelectorAll(selector);
-      for (const button of buttons) {
-        const buttonType = this.getButtonType(button, selector);
-        if (this.shouldSkipButtonType(buttonType, seriesSettings) &&
-            this.isButtonClickable(button) && 
-            this.shouldClickBasedOnTiming(button, selector)) {
-          this.clickButton(button, `selector: ${selector} (${buttonType})`);
-          return;
+    // Neue Logik: Wenn autoNext aktiv ist, nur "next" klicken. Wenn autoNext aus ist, immer "Abspann ansehen" klicken.
+    let clicked = false;
+    if (seriesSettings.autoNext) {
+      // Nur next-Buttons klicken
+      for (const selector of this.buttonPatterns.selectors) {
+        const buttons = document.querySelectorAll(selector);
+        for (const button of buttons) {
+          const buttonType = this.getButtonType(button, selector);
+          if (buttonType === 'next' && this.shouldSkipButtonType(buttonType, seriesSettings) && this.isButtonClickable(button) && this.shouldClickBasedOnTiming(button, selector)) {
+            this.clickButton(button, `selector: ${selector} (${buttonType})`);
+            clicked = true;
+            break;
+          }
+        }
+        if (clicked) break;
+      }
+      if (!clicked) {
+        const allButtons = document.querySelectorAll('button, [role="button"], a, div[onclick]');
+        for (const button of allButtons) {
+          const buttonType = this.getButtonTypeFromText(button);
+          if (buttonType === 'next' && this.shouldSkipButtonType(buttonType, seriesSettings) && this.shouldClickButton(button) && this.shouldClickBasedOnTiming(button)) {
+            this.clickButton(button, `text/aria pattern match (${buttonType})`);
+            clicked = true;
+            break;
+          }
         }
       }
-    }
-    
-    // Then try text-based detection (broader but less reliable)
-    const allButtons = document.querySelectorAll('button, [role="button"], a, div[onclick]');
-    
-    for (const button of allButtons) {
-      const buttonType = this.getButtonTypeFromText(button);
-      if (this.shouldSkipButtonType(buttonType, seriesSettings) &&
-          this.shouldClickButton(button) && 
-          this.shouldClickBasedOnTiming(button)) {
-        this.clickButton(button, `text/aria pattern match (${buttonType})`);
-        return;
-      }
-    }
-    
-    // Special handling for auto-advance popups
-    if (seriesSettings.autoNext) {
+      // Special handling for auto-advance popups
       this.checkForAutoAdvancePopup();
+    } else {
+      // autoNext ist aus: Immer "Abspann ansehen" klicken (watch-abspann)
+      for (const selector of this.buttonPatterns.selectors) {
+        const buttons = document.querySelectorAll(selector);
+        for (const button of buttons) {
+          const buttonType = this.getButtonType(button, selector);
+          if (buttonType === 'watch-abspann' && this.isButtonClickable(button)) {
+            this.clickButton(button, `selector: ${selector} (${buttonType})`);
+            clicked = true;
+            break;
+          }
+        }
+        if (clicked) break;
+      }
+      if (!clicked) {
+        const allButtons = document.querySelectorAll('button, [role="button"], a, div[onclick]');
+        for (const button of allButtons) {
+          const buttonType = this.getButtonTypeFromText(button);
+          if (buttonType === 'watch-abspann' && this.shouldClickButton(button)) {
+            this.clickButton(button, `text/aria pattern match (${buttonType})`);
+            clicked = true;
+            break;
+          }
+        }
+      }
     }
   }
   
@@ -1507,19 +1545,36 @@ class VideoPlayerSkipper {
   getButtonType(button, selector) {
     const text = (button.textContent || button.getAttribute('aria-label') || button.title || '').toLowerCase();
     const selectorLower = selector.toLowerCase();
-    
-    // Check for "watch/view" buttons first - these should NOT be clicked for skipping
-    const watchPatterns = ['ansehen', 'anschauen', 'watch', 'view', 'play', 'abspielen', 'schauen'];
+
+    // Multilingual patterns for "watch/view" and "credits/abspann"
+    const watchPatterns = [
+      'ansehen', 'anschauen', 'watch', 'view', 'play', 'abspielen', 'schauen',
+      'ver', 'voir', 'guarda', 'assistir', 'bekijken', 'oglądać', 'смотреть', '見る', '시청', '观看'
+    ];
+    const creditsPatterns = [
+      'abspann', 'credits', 'créditos', 'crédits', 'crediti', 'créditos', 'aftiteling', 'napisy końcowe', 'титры', 'クレジット', '크레딧', '片尾'
+    ];
+
     const isWatchButton = watchPatterns.some(pattern => text.includes(pattern));
-    
-    // Special check for "Abspann ansehen" - this is a WATCH button, not a SKIP button
-    if (text.includes('abspann') && text.includes('ansehen')) {
-      // Verbose debug log removed button, not a skip button: "${text}"`);
-      return 'watch'; // This should NOT be clicked
+    const isCreditsButton = creditsPatterns.some(pattern => text.includes(pattern));
+
+    // Robust Netflix 'Abspann ansehen' detection via data-uia attribute (language-independent)
+    if (button.getAttribute('data-uia') === 'watch-credits-seamless-button') {
+      return 'watch-abspann';
     }
-    
+    // Robust Netflix 'Nächste Folge' detection via data-uia attribute (language-independent)
+    if (button.getAttribute('data-uia') === 'next-episode-seamless-button') {
+      return 'next';
+    }
+    // Special check for "Abspann ansehen" ("Watch credits" etc.) - block for all supported languages
+    if (isCreditsButton && isWatchButton) {
+      if (window.location.hostname.includes('netflix.')) {
+        return 'watch-abspann';
+      }
+      return 'watch'; // fallback for other platforms
+    }
+
     if (isWatchButton) {
-      // Verbose debug log removed
       return 'watch'; // Special type for watch buttons that we should never click for skipping
     }
     
@@ -1601,19 +1656,20 @@ class VideoPlayerSkipper {
       case 'next':
         shouldSkip = seriesSettings.autoNext;
         break;
+      case 'watch-abspann':
+        // Never click "Abspann ansehen" on Netflix
+        shouldSkip = false;
+        break;
       case 'watch':
         // NEVER click watch/view buttons - they're for viewing content, not skipping
         shouldSkip = false;
-        // Verbose debug log removed
         break;
       default:
         // Conservative handling of unknown buttons
         if (this.currentSeries && this.currentSeries.title) {
           shouldSkip = seriesSettings.skipAds; // Use ad setting for unknown on known series
-          // Verbose debug log removed for known series`);
         } else {
           shouldSkip = false; // Don't skip unknown buttons without series context
-          // Verbose debug log removed`);
         }
         break;
     }
