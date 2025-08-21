@@ -1394,6 +1394,11 @@ class VideoPlayerSkipper {
     
     // Initial scan
     this.scanForButtons();
+
+    // Sofortige Serienerkennung nach Start (wichtig für Reload/F5)
+    if (typeof this.detectCurrentSeries === 'function') {
+      this.detectCurrentSeries();
+    }
   }
   
   stop() {
@@ -1635,13 +1640,13 @@ class VideoPlayerSkipper {
   
   getButtonTypeFromText(button) {
     const text = (button.textContent || button.getAttribute('aria-label') || '').toLowerCase();
-    
-    if (text.includes('intro') || text.includes('opening')) return 'intro';
+
+    if (text.includes('intro') || text.includes('opening') || text.includes('vorspann')) return 'intro';
     if (text.includes('recap') || text.includes('previously') || text.includes('zuvor')) return 'recap';
     if (text.includes('credits') || text.includes('abspann') || text.includes('end')) return 'credits';
     if (text.includes('ad') || text.includes('anzeige') || text.includes('werbung')) return 'ads';
     if (text.includes('next') || text.includes('nächste') || text.includes('continue')) return 'next';
-    
+
     return 'unknown';
   }
   
