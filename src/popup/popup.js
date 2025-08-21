@@ -662,22 +662,40 @@ class PopupManager {
   showPermanentUnsupportedMessage() {
     const statusEl = document.getElementById('statusMessage');
     if (statusEl && this.languageManager) {
-      // Show the permanent error message without timeout to prevent flicker
-      statusEl.innerHTML = `
-        <div style="text-align: center;">
-          <strong>❌ ${this.languageManager.t('unsupportedSiteTitle')}</strong><br>
-          <small style="opacity: 0.8; margin-top: 8px; display: block;">
-            ${this.languageManager.t('unsupportedSiteDesc')}<br>
-            📺 ${this.languageManager.t('supportedPlatforms')}
-          </small>
-          <small style="opacity: 0.6; margin-top: 8px; display: block;">
-            ${this.languageManager.t('unsupportedSiteHint')}
-          </small>
-        </div>
-      `;
+      // Clear previous content
+      statusEl.textContent = '';
+
+      // Create container div
+      const container = document.createElement('div');
+      container.style.textAlign = 'center';
+
+      // Strong title
+      const strong = document.createElement('strong');
+      strong.textContent = `❌ ${this.languageManager.t('unsupportedSiteTitle')}`;
+      container.appendChild(strong);
+      container.appendChild(document.createElement('br'));
+
+      // First small (desc + supported platforms)
+      const small1 = document.createElement('small');
+      small1.style.opacity = '0.8';
+      small1.style.marginTop = '8px';
+      small1.style.display = 'block';
+      small1.appendChild(document.createTextNode(this.languageManager.t('unsupportedSiteDesc')));
+      small1.appendChild(document.createElement('br'));
+      small1.appendChild(document.createTextNode(`📺 ${this.languageManager.t('supportedPlatforms')}`));
+      container.appendChild(small1);
+
+      // Second small (hint)
+      const small2 = document.createElement('small');
+      small2.style.opacity = '0.6';
+      small2.style.marginTop = '8px';
+      small2.style.display = 'block';
+      small2.appendChild(document.createTextNode(this.languageManager.t('unsupportedSiteHint')));
+      container.appendChild(small2);
+
+      statusEl.appendChild(container);
       statusEl.className = 'status error';
       statusEl.classList.remove('hidden');
-      
       // Mark as permanent - no timeout to hide the message
       statusEl.setAttribute('data-permanent', 'true');
     }
