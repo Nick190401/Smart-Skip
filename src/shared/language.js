@@ -15,7 +15,7 @@ class LanguageManager {
         unsupportedSiteTitle: "Nicht unterstützte Website",
         unsupportedSiteDesc: "Diese Extension funktioniert nur auf:",
         unsupportedSiteHint: "Gehe zu einer Streaming-Website, um die Extension zu nutzen",
-        supportedPlatforms: "Netflix, Disney+, Prime Video, YouTube<br>🎭 Crunchyroll, Hulu, Apple TV+, HBO Max<br>📺 und weiteren Streaming-Plattformen",
+        supportedPlatforms: "Netflix, Disney+, Prime Video, YouTube🎭 Crunchyroll, Hulu, Apple TV+, HBO Max📺 und weiteren Streaming-Plattformen",
         
         // Settings
         settingsTitle: "Einstellungen",
@@ -81,7 +81,7 @@ class LanguageManager {
         unsupportedSiteTitle: "Unsupported Website",
         unsupportedSiteDesc: "This extension only works on:",
         unsupportedSiteHint: "Go to a streaming website to use the extension",
-        supportedPlatforms: "Netflix, Disney+, Prime Video, YouTube<br>🎭 Crunchyroll, Hulu, Apple TV+, HBO Max<br>📺 and other streaming platforms",
+        supportedPlatforms: "Netflix, Disney+, Prime Video, YouTube 🎭 Crunchyroll, Hulu, Apple TV+, HBO Max📺 and other streaming platforms",
         
         // Settings
         settingsTitle: "Settings",

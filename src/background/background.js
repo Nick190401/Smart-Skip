@@ -45,30 +45,14 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       }
     }
     
-    // Show install notification
-    if (details.reason === 'install') {
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: 'icons/icon.svg',
-        title: 'Video Player Skipper',
-        message: 'Extension installiert! Besuche eine Streaming-Seite um anzufangen.',
-        buttons: [{ title: 'Zu Netflix gehen' }]
-      });
-    }
+
     
   } catch (error) {
     // Error initializing extension - silently fail
   }
 });
 
-// Handle notification button clicks
-chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) => {
-  if (buttonIndex === 0) {
-    // Open Netflix
-    chrome.tabs.create({ url: 'https://www.netflix.com' });
-  }
-  chrome.notifications.clear(notificationId);
-});
+
 
 // Handle messages from content scripts
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -110,18 +94,7 @@ async function handleMessage(request, sender, sendResponse) {
 async function handleButtonClicked(request, sender) {
   const { buttonText, domain } = request;
   
-  try {
-    // Show success notification
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: 'icons/icon.svg',
-      title: 'Button geklickt!',
-      message: `"${buttonText}" auf ${domain} übersprungen`,
-    });
-    
-  } catch (error) {
-    // Error showing notification - silently fail
-  }
+  // Notification logic removed
 }
 
 async function handleSeriesDetected(request, sender) {
@@ -145,13 +118,7 @@ async function handleSeriesDetected(request, sender) {
       
       await saveSettings(settings);
       
-      // Show notification for new series
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: 'icons/icon.svg',
-        title: 'Neue Serie erkannt!',
-        message: `${series.title} wurde zu den Einstellungen hinzugefügt`,
-      });
+      // Notification logic removed
     } else {
       // Update last seen
       settings.series[seriesKey].lastSeen = new Date().toISOString();
@@ -229,11 +196,4 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
-// Cleanup old notifications
-chrome.runtime.onStartup.addListener(() => {
-  chrome.notifications.getAll((notifications) => {
-    Object.keys(notifications).forEach(id => {
-      chrome.notifications.clear(id);
-    });
-  });
-});
+
