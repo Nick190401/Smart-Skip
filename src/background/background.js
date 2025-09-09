@@ -5,20 +5,16 @@ const DEFAULT_SETTINGS = {
   series: {}
 };
 
-// Initialize extension
 chrome.runtime.onInstalled.addListener(async (details) => {
   try {
-    // Load existing settings or set defaults
     const result = await chrome.storage.sync.get(['skipperSettings']);
     
     if (!result.skipperSettings) {
       await chrome.storage.sync.set({ skipperSettings: DEFAULT_SETTINGS });
     } else {
-      // Migrate old settings if needed
       const settings = result.skipperSettings;
       let needsUpdate = false;
       
-      // Ensure new structure exists
       if (!settings.series) {
         settings.series = {};
         needsUpdate = true;
@@ -29,7 +25,6 @@ chrome.runtime.onInstalled.addListener(async (details) => {
         needsUpdate = true;
       }
       
-      // Migrate old domainSettings to new domains structure
       if (settings.domainSettings) {
         Object.keys(settings.domainSettings).forEach(domain => {
           if (!settings.domains[domain]) {
@@ -44,20 +39,15 @@ chrome.runtime.onInstalled.addListener(async (details) => {
         await chrome.storage.sync.set({ skipperSettings: settings });
       }
     }
-    
-
-    
   } catch (error) {
-    // Error initializing extension - silently fail
+    // Silent fail
   }
 });
 
 
-
-// Handle messages from content scripts
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   handleMessage(request, sender, sendResponse);
-  return true; // Keep message channel open for async response
+  return true;
 });
 
 async function handleMessage(request, sender, sendResponse) {
@@ -92,19 +82,15 @@ async function handleMessage(request, sender, sendResponse) {
 }
 
 async function handleButtonClicked(request, sender) {
-  const { buttonText, domain } = request;
-  
-  // Notification logic removed
+  // No action needed
 }
 
 async function handleSeriesDetected(request, sender) {
-  const { series, domain } = request;
-  
   try {
+    const { series, domain } = request;
     const settings = await getSettings();
     const seriesKey = `${domain}:${series.title}`;
     
-    // Auto-create series entry with default settings if it doesn't exist
     if (!settings.series[seriesKey]) {
       settings.series[seriesKey] = {
         skipIntro: true,
@@ -117,22 +103,17 @@ async function handleSeriesDetected(request, sender) {
       };
       
       await saveSettings(settings);
-      
-      // Notification logic removed
     } else {
-      // Update last seen
       settings.series[seriesKey].lastSeen = new Date().toISOString();
       await saveSettings(settings);
     }
-    
   } catch (error) {
-    // Error handling series detection - silently fail
+    // Silent fail
   }
 }
 
 async function getSettings() {
   try {
-    // Try sync storage first
     let result = await chrome.storage.sync.get(['skipperSettings']);
     
     if (!result.skipperSettings) {
@@ -140,7 +121,6 @@ async function getSettings() {
     }
     
     if (result.skipperSettings) {
-      // Validate settings structure
       const settings = result.skipperSettings;
       return {
         globalEnabled: settings.globalEnabled !== undefined ? settings.globalEnabled : true,
@@ -150,7 +130,6 @@ async function getSettings() {
       };
     }
     
-    // Return defaults if nothing found
     return DEFAULT_SETTINGS;
   } catch (error) {
     return DEFAULT_SETTINGS;
@@ -159,7 +138,6 @@ async function getSettings() {
 
 async function saveSettings(settings) {
   try {
-    // Validate settings structure
     if (!settings || typeof settings !== 'object') {
       throw new Error('Invalid settings structure');
     }
@@ -171,7 +149,6 @@ async function saveSettings(settings) {
       series: settings.series || {}
     };
     
-    // Try sync storage first
     try {
       await chrome.storage.sync.set({ skipperSettings: validSettings });
     } catch (syncError) {
@@ -182,7 +159,6 @@ async function saveSettings(settings) {
   }
 }
 
-// Listen for tab updates to detect streaming sites
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.url) {
     const streamingSites = [
