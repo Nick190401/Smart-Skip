@@ -119,8 +119,8 @@
   },
   
   "icons": {
-    "48": "assets/icons/icon.svg",
-    "96": "assets/icons/icon.svg"
+    "48": "assets/icons/smart-skip-icon-48x48.png",
+    "96": "assets/icons/smart-skip-icon-96x96.png"
   },
   
   "background": {
