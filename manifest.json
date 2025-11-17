@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Smart Skip",
-  "version": "1.1.6",
+  "version": "1.1.8",
   "description": "Automatically clicks Skip Intro, Skip Recap, Skip Credits, Skip Ads, and Next Episode buttons on streaming platforms",
   
   "browser_specific_settings": {
@@ -12,7 +12,9 @@
   
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "scripting",
+    "tabs"
   ],
   
   "host_permissions": [
@@ -83,7 +85,7 @@
         "*://*.amazon.ae/*",
         "*://*.amazon.sa/*",
         "*://*.amazon.eg/*",
-  "*://*.primevideo.com/*",
+       "*://*.primevideo.com/*",
         "*://*.crunchyroll.com/*",
         "*://*.hulu.com/*",
         "*://*.apple.com/*",

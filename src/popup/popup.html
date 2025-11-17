@@ -3,6 +3,11 @@
 <head>
   <meta charset="utf-8">
   <script src="../shared/language.js"></script>
+  <!--
+    Smart Skip Popup (glass-style UI)
+    - Uses a blurred background layer to emulate transparency
+    - Settings cards and buttons match the in-player HUD aesthetic
+  -->
   <style>
     * {
       margin: 0;
@@ -16,9 +21,8 @@
       max-height: 600px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
       font-size: 14px;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      background-attachment: fixed;
-      background-size: cover;
+      /* Base fully transparent; visual background provided by .bg layer */
+      background: transparent;
       color: #ffffff;
       overflow-y: auto;
       margin: 0;
@@ -26,10 +30,33 @@
       display: flex;
       flex-direction: column;
     }
+
+    /* Simulated transparent glass background using a blurred screenshot */
+    .bg {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+    .bg-img {
+      position: absolute;
+      inset: 0;
+      background-position: center;
+      background-size: cover;
+      filter: blur(14px) saturate(1.2) brightness(0.7);
+      transform: scale(1.05); /* hide blur edges */
+    }
+    .bg-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(16, 18, 32, 0.52);
+    }
     
     .container {
       padding: 20px;
       position: relative;
+      z-index: 1;
       flex: 1;
       display: flex;
       flex-direction: column;
@@ -84,15 +111,16 @@
       justify-content: space-between;
       margin-bottom: 12px;
       padding: 12px 16px;
-      background: rgba(255, 255, 255, 0.1);
-      border-radius: 12px;
-      backdrop-filter: blur(10px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(20,20,20,0.75);
+      border-radius: 10px;
+      backdrop-filter: saturate(1.2) blur(6px);
+      border: 1px solid rgba(255,255,255,0.15);
+      box-shadow: 0 6px 16px rgba(0,0,0,0.35);
       transition: all 0.2s ease;
     }
     
     .setting-item:hover {
-      background: rgba(255, 255, 255, 0.15);
+      background: rgba(255, 255, 255, 0.1);
     }
     
     .setting-label-wrapper {
@@ -129,16 +157,18 @@
       position: relative;
       width: 44px;
       height: 24px;
-      background: rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.12);
       border-radius: 12px;
       cursor: pointer;
       transition: all 0.3s ease;
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.2);
     }
     
     .toggle-switch.active {
-      background: rgba(74, 222, 128, 0.8);
-      box-shadow: 0 0 12px rgba(74, 222, 128, 0.4);
+      background: rgba(34, 197, 94, 0.85);
+      box-shadow: 0 0 12px rgba(34, 197, 94, 0.35);
+      border-color: rgba(34,197,94,0.6);
     }
     
     .toggle-slider {
@@ -159,8 +189,8 @@
     
     /* Language Select */
     .language-select {
-      background: rgba(255, 255, 255, 0.1);
-      border: 1px solid rgba(255, 255, 255, 0.2);
+      background: rgba(20,20,20,0.75);
+      border: 1px solid rgba(255, 255, 255, 0.18);
       border-radius: 6px;
       color: #fff;
       padding: 8px 12px;
@@ -168,6 +198,7 @@
       outline: none;
       cursor: pointer;
       min-width: 120px;
+      backdrop-filter: saturate(1.2) blur(6px);
     }
     
     .language-select:hover {
@@ -189,10 +220,12 @@
     /* Series Section */
     .series-section {
       margin-bottom: 20px;
-      background: rgba(255, 255, 255, 0.05);
-      border-radius: 16px;
+      background: rgba(20,20,20,0.75);
+      border-radius: 10px;
       padding: 16px;
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      backdrop-filter: saturate(1.2) blur(6px);
+      box-shadow: 0 6px 16px rgba(0,0,0,0.35);
     }
     
     .section-header {
@@ -271,7 +304,7 @@
       padding: 8px 12px;
       background: rgba(255, 255, 255, 0.08);
       border-radius: 8px;
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.18);
       transition: all 0.2s ease;
     }
     
@@ -339,9 +372,10 @@
     .series-item {
       margin-bottom: 12px;
       padding: 12px;
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(20,20,20,0.65);
       border-radius: 10px;
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      backdrop-filter: blur(6px);
     }
     
     .series-item-header {
@@ -375,16 +409,16 @@
     
     .btn {
       flex: 1;
-      padding: 12px 16px;
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      border-radius: 10px;
-      background: rgba(255, 255, 255, 0.1);
+      padding: 10px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.08);
       color: #ffffff;
       cursor: pointer;
       font-size: 13px;
       font-weight: 500;
       transition: all 0.2s ease;
-      backdrop-filter: blur(10px);
+      backdrop-filter: blur(6px);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -392,12 +426,12 @@
     }
     
     .btn:hover {
-      background: rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.18);
       transform: translateY(-1px);
     }
     
     .btn-primary {
-      background: rgba(255, 255, 255, 0.15);
+      background: rgba(255, 255, 255, 0.12);
       border-color: rgba(255, 255, 255, 0.3);
       color: #ffffff;
     }
@@ -425,23 +459,27 @@
     }
     
     .status.success {
-      background: rgba(34, 197, 94, 0.2);
+      background: rgba(34, 197, 94, 0.18);
       border: 1px solid rgba(34, 197, 94, 0.4);
+      backdrop-filter: blur(6px);
     }
     
     .status.error {
-      background: rgba(239, 68, 68, 0.2);
+      background: rgba(239, 68, 68, 0.18);
       border: 1px solid rgba(239, 68, 68, 0.4);
+      backdrop-filter: blur(6px);
     }
     
     .status.warning {
-      background: rgba(245, 158, 11, 0.2);
+      background: rgba(245, 158, 11, 0.18);
       border: 1px solid rgba(245, 158, 11, 0.4);
+      backdrop-filter: blur(6px);
     }
     
     .status.info {
-      background: rgba(168, 85, 247, 0.2);
+      background: rgba(168, 85, 247, 0.18);
       border: 1px solid rgba(168, 85, 247, 0.4);
+      backdrop-filter: blur(6px);
     }
     
     /* Compact mode for unsupported sites */
@@ -582,6 +620,12 @@
   </style>
 </head>
 <body>
+  <!-- Background layer to simulate transparency via blurred screenshot -->
+  <div class="bg" aria-hidden="true">
+    <div class="bg-img" id="popupBgImg"></div>
+    <div class="bg-overlay"></div>
+  </div>
+  <!-- Main content container sits above the background layer -->
   <div class="container">
     <div class="content-wrapper">
       <div class="main-content">
@@ -597,7 +641,7 @@
           </div>
         </div>
         
-        <!-- Global Settings -->
+  <!-- Global Settings -->
         <div class="global-settings">
           <div class="setting-item">
             <div class="setting-label-wrapper">
@@ -628,6 +672,36 @@
               <div class="toggle-slider"></div>
             </div>
           </div>
+
+          <div class="setting-item">
+            <div class="setting-label-wrapper">
+              <svg class="setting-icon" viewBox="0 0 24 24">
+                <path d="M3 4h18v12H3zM7 20h10v-2H7z"/>
+              </svg>
+              <div class="setting-text">
+                <div class="setting-label" data-i18n="hudEnabled">HUD anzeigen</div>
+                <div class="setting-description" data-i18n="hudEnabledDesc">Overlay im Player anzeigen</div>
+              </div>
+            </div>
+            <div class="toggle-switch" id="hudToggle">
+              <div class="toggle-slider"></div>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-label-wrapper">
+              <svg class="setting-icon" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10"/>
+              </svg>
+              <div class="setting-text">
+                <div class="setting-label" data-i18n="hudDomainEnabled">HUD für diese Website</div>
+                <div class="setting-description" data-i18n="hudDomainEnabledDesc">HUD speziell auf dieser Domain ein-/ausblenden</div>
+              </div>
+            </div>
+            <div class="toggle-switch" id="domainHudToggle">
+              <div class="toggle-slider"></div>
+            </div>
+          </div>
           
 
           
@@ -649,7 +723,7 @@
           </div>
         </div>
         
-        <!-- Current Series Section -->
+  <!-- Current Series Section -->
         <div class="series-section" id="currentSeriesSection">
           <div class="section-header">
             <div class="section-title">
@@ -724,7 +798,7 @@
     </div>
   </div>
   
-  <!-- Unsupported site view (old-style, hidden by default) -->
+  <!-- Unsupported site view (compact, toggles programmatic injection) -->
   <div class="container unsupported-content" style="display:none;">
     <div class="content-wrapper">
       <div class="main-content">
@@ -736,22 +810,33 @@
           </div>
           <div class="header-content">
             <h1 data-i18n="unsupportedSiteTitle">Seite nicht unterstützt</h1>
-            <div class="subtitle" data-i18n="unsupportedSiteDesc">Diese Website wird derzeit nicht von Smart Skip unterstützt.</div>
+            <div class="subtitle"><span data-i18n="unsupportedSiteDesc">Diese Website wird derzeit nicht von Smart Skip unterstützt.</span> <span id="unsupportedDomainName"></span></div>
           </div>
         </div>
 
         <div class="series-section" style="margin-top:16px;">
           <div class="series-title" data-i18n="unsupportedSite">Seite nicht unterstützt</div>
-          <div class="series-info" data-i18n="unsupportedSiteHint">Diese Website wird bisher nicht von Smart Skip unterstützt. Wenn du möchtest, kannst du dem Projekt die URL melden.</div>
+          <div class="series-info" data-i18n="unsupportedActionsHint">Du kannst Smart Skip trotzdem auf dieser Seite aktivieren. Das funktioniert experimentell.</div>
+          <div class="buttons" style="margin-top:12px;">
+            <button class="btn btn-primary" id="enableOnceBtn">
+              <span data-i18n="enableOnce">Einmal hier aktivieren</span>
+            </button>
+            <button class="btn" id="enableDomainBtn">
+              <span data-i18n="enableDomain">Immer auf dieser Domain</span>
+            </button>
+          </div>
+          <div class="buttons" style="margin-top:8px;">
+            <button class="btn" id="reportSiteBtn">
+              <span data-i18n="reportSite">Seite melden</span>
+            </button>
+            <button class="btn" id="viewSupportedBtn">
+              <span data-i18n="viewSupported">Unterstützte Plattformen</span>
+            </button>
+          </div>
           <div class="series-info" style="margin-top:8px;" data-i18n="supportedPlatforms">Unterstützte Plattformen: Netflix, Disney+, Amazon Prime Video, Crunchyroll, Apple TV+, Joyn, RTL+, ProSiebenSat.1 Mediathek, ARD, ZDF, Mediathek, u.v.m.</div>
         </div>
       </div>
       <div class="footer-content">
-        <div class="buttons">
-          <button class="btn btn-primary" id="reloadBtnUnsupported">
-            <span data-i18n="reloadButton">Neuladen</span>
-          </button>
-        </div>
       </div>
     </div>
   </div>

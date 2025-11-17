@@ -8,7 +8,7 @@
 <br>
 
 [![Firefox Extension](https://img.shields.io/badge/Firefox-Extension-FF7139?style=for-the-badge&logo=firefox&logoColor=white)](https://addons.mozilla.org/firefox/)
-[![Version](https://img.shields.io/badge/version-1.1.6-4285F4?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Nick190401/Smart-Skip)
+[![Version](https://img.shields.io/badge/version-1.1.7-4285F4?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Nick190401/Smart-Skip)
 [![License](https://img.shields.io/badge/license-Custom-28A745?style=for-the-badge&logo=book&logoColor=white)](LICENSE)
 [![Manifest V3](https://img.shields.io/badge/manifest-v3-9C27B0?style=for-the-badge&logo=google-chrome&logoColor=white)](manifest.json)
 

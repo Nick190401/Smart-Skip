@@ -1,3 +1,9 @@
+/**
+ * LanguageManager
+ * - Loads/saves the user's UI language preference
+ * - Provides simple key-based translation (t)
+ * - Falls back gracefully: user pref → browser lang → 'en'
+ */
 class LanguageManager {
   constructor() {
     this.currentLanguage = null;
@@ -11,7 +17,12 @@ class LanguageManager {
         unsupportedSite: "Diese Website wird nicht unterstützt",
         unsupportedSiteTitle: "Nicht unterstützte Website",
         unsupportedSiteDesc: "Diese Extension funktioniert nur auf:",
-        unsupportedSiteHint: "Gehe zu einer Streaming-Website, um die Extension zu nutzen",
+  unsupportedSiteHint: "Gehe zu einer Streaming-Website, um die Extension zu nutzen",
+  unsupportedActionsHint: "Du kannst Smart Skip trotzdem auf dieser Seite aktivieren. Das funktioniert experimentell.",
+  enableOnce: "Einmal hier aktivieren",
+  enableDomain: "Immer auf dieser Domain",
+  reportSite: "Seite melden",
+  viewSupported: "Unterstützte Plattformen",
   supportedPlatforms: "Netflix, Disney+, Prime Video, Crunchyroll, Hulu, Apple TV+, HBO Max📺 und weiteren Streaming-Plattformen",
         
         settingsTitle: "Einstellungen",
@@ -19,6 +30,10 @@ class LanguageManager {
         extensionEnabled: "Extension aktiviert",
         domainEnabled: "Für diese Website",
         domainEnabledDesc: "Spezielle Einstellung für aktuelle Website",
+  hudEnabled: "HUD anzeigen",
+  hudEnabledDesc: "Overlay im Player anzeigen",
+  hudDomainEnabled: "HUD für diese Website",
+  hudDomainEnabledDesc: "HUD speziell auf dieser Domain ein-/ausblenden",
         
         skipOptions: "Skip-Optionen",
         skipIntro: "Intro überspringen",
@@ -66,7 +81,12 @@ class LanguageManager {
         unsupportedSite: "This website is not supported",
         unsupportedSiteTitle: "Unsupported Website",
         unsupportedSiteDesc: "This extension only works on:",
-        unsupportedSiteHint: "Go to a streaming website to use the extension",
+  unsupportedSiteHint: "Go to a streaming website to use the extension",
+  unsupportedActionsHint: "You can still enable Smart Skip on this site. This is experimental.",
+  enableOnce: "Enable here once",
+  enableDomain: "Always on this domain",
+  reportSite: "Report this site",
+  viewSupported: "View supported platforms",
   supportedPlatforms: "Netflix, Disney+, Prime Video, Crunchyroll, Hulu, Apple TV+, HBO Max📺 and other streaming platforms",
         
         settingsTitle: "Settings",
@@ -74,6 +94,10 @@ class LanguageManager {
         extensionEnabled: "Extension enabled",
         domainEnabled: "For this website",
         domainEnabledDesc: "Special setting for current website",
+  hudEnabled: "Show HUD",
+  hudEnabledDesc: "Show overlay within the player",
+  hudDomainEnabled: "HUD for this website",
+  hudDomainEnabledDesc: "Show/hide HUD specifically on this domain",
         
         skipOptions: "Skip Options",
         skipIntro: "Skip Intro",
@@ -113,12 +137,14 @@ class LanguageManager {
       }
     };
   }
+  /** Detect browser language and map to supported keys. */
   detectBrowserLanguage() {
     const browserLang = navigator.language || navigator.userLanguage || 'en';
     const langCode = browserLang.toLowerCase().split('-')[0];
     return this.translations[langCode] ? langCode : 'en';
   }
   
+  /** Load saved language from storage with sync/local fallback. */
   async loadLanguagePreference() {
     try {
       let languageSettings = null;
@@ -157,6 +183,7 @@ class LanguageManager {
     }
   }
   
+  /** Persist language preference to storage. */
   async saveLanguagePreference(language) {
     try {
       const languageSettings = { language: language };
@@ -173,6 +200,7 @@ class LanguageManager {
     }
   }
   
+  /** Resolve the effective language (auto → browser detection). */
   getEffectiveLanguage() {
     if (this.currentLanguage === 'auto') {
       return this.detectBrowserLanguage();
@@ -180,6 +208,7 @@ class LanguageManager {
     return this.currentLanguage || 'en';
   }
   
+  /** Translate a key using the effective language with 'en' fallback. */
   t(key) {
     const effectiveLang = this.getEffectiveLanguage();
     const translation = this.translations[effectiveLang]?.[key];
@@ -195,6 +224,7 @@ class LanguageManager {
     return translation;
   }
   
+  /** Initialize language manager; call before using t(). */
   async initialize() {
     await this.loadLanguagePreference();
   }

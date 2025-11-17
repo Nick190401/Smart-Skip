@@ -1,3 +1,9 @@
+/**
+ * VideoPlayerSkipper (Content Script)
+ * - Detects current series/episode and auto-clicks Skip/Next controls
+ * - Renders a lightweight, draggable HUD with compact/advanced modes
+ * - Minimizes interference by scoping actions to the player container
+ */
 class VideoPlayerSkipper {
   constructor() {
     this.isEnabled = true;
@@ -14,16 +20,29 @@ class VideoPlayerSkipper {
     this.seriesDetectionTimeout = null;
     this.lastUrl = null;
     this.lastSeriesDetection = 0;
-    this.lastDetectionUrl = null;
-    this.lastDomStateHash = null;
+  this.lastDetectionUrl = null;
+  this.lastDomStateHash = null;
+  // HUD and countdown state
+  this.hud = null;
+  this.hudStyleEl = null;
+  this.hudDragging = false;
+  this.hudDragOffset = { x: 0, y: 0 };
+  this.autoNextTimeoutId = null;
+  this.countdownOverlay = null;
+  // HUD visibility state
+  this.hudHideTimeoutId = null;
+  this.hudHideDelay = 2500;
+  this.hudBoundContainer = null;
+  this.hudInteracting = false;
+  this.hudUserMoved = false;
     
     this.supportedDomains = [
       'netflix.',
       'disneyplus.',
       'disney.',
       'amazon.',
-  'primevideo.',
-  'crunchyroll.',
+      'primevideo.',
+      'crunchyroll.',
       'hulu.com',
       'peacocktv.com',
       'paramountplus.com',
@@ -32,7 +51,6 @@ class VideoPlayerSkipper {
       'tv.apple.com',
       'hbomax.',
       'max.com',
-      'hbo.',
       'wakanim.',
       'sky.',
       'joyn.',
@@ -54,12 +72,12 @@ class VideoPlayerSkipper {
       }
     });
     
-    if (!this.isSupportedPlatform) {
-      return;
-    }
+    // Do not early-return on unsupported platforms; the script can be injected programmatically for overrides
     
     this.settings = {
       globalEnabled: true,
+      // Controls HUD visibility globally; per-domain can override via domains[domain].hudEnabled
+      globalHudEnabled: true,
       verboseLogging: false,
       domains: {},
       series: {}
@@ -71,20 +89,636 @@ class VideoPlayerSkipper {
     this.detectedLanguage = null;
     this.buttonPatterns = null;
     
+    // Kick off initialization; avoid throwing in constructor
     this.init();
+
+    // Swallow noisy rejections when the extension reloads and invalidates the context
+    try {
+      window.addEventListener('unhandledrejection', (e) => {
+        const msg = String((e && (e.reason && (e.reason.message || e.reason) || '')) || '').toLowerCase();
+        if (msg.includes('extension context invalidated')) {
+          e.preventDefault();
+        }
+      });
+      window.addEventListener('error', (e) => {
+        const msg = String((e && e.message) || '').toLowerCase();
+        if (msg.includes('extension context invalidated')) {
+          e.preventDefault();
+        }
+      });
+    } catch (_) {}
+  }
+  /**
+   * Safely send a runtime message without throwing if extension context is invalidated
+   * (e.g., during reload/navigation) or when no receiver is present.
+   */
+  safeRuntimeSendMessage(message) {
+    try {
+      if (!this.isExtensionContextValid() || !chrome.runtime.sendMessage) return;
+      const ret = chrome.runtime.sendMessage(message);
+      // If Promise-like (Firefox/Chromium MV3), swallow rejections
+      if (ret && typeof ret.then === 'function') {
+        ret.catch(() => {});
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  /** Check whether the extension context is still valid (not reloaded). */
+  isExtensionContextValid() {
+    try {
+      return !!(typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id);
+    } catch (e) {
+      return false;
+    }
   }
   
-  async init() {
-    if (!this.isSupportedPlatform) {
+  // HUD: creation and behavior
+  /** Ensure a single HUD instance is attached to the current player container. */
+  ensureHUD() {
+    try {
+      if (!this.isHudEnabled()) {
+        // If disabled but HUD exists, remove it
+        if (this.hud && this.hud.parentElement) this.destroyHUD();
+        return;
+      }
+      const container = this.getPlayerContainer();
+      if (!container) return;
+      // If we already have a HUD in the DOM and it's in the right container, ensure visibility listeners and stop here
+      if (this.hud && document.body.contains(this.hud)) {
+        if (container.contains(this.hud)) {
+          this.setupHudVisibilityListeners(container);
+          return;
+        } else {
+          // Move HUD into the new container
+          container.appendChild(this.hud);
+          this.restoreHudPosition();
+          this.updateHUDState();
+          this.setupHudVisibilityListeners(container);
+          return;
+        }
+      }
+      
+      // Check if a HUD already exists in the container (e.g., from previous instance)
+      const existingList = Array.from(container.querySelectorAll('.smart-skip-hud'));
+      if (existingList.length > 0) {
+        const existing = existingList[0];
+        // Remove duplicates if any
+        if (existingList.length > 1) {
+          existingList.slice(1).forEach(el => { try { el.remove(); } catch (e) {} });
+        }
+        this.hud = existing;
+        this.makeHUDDraggable();
+        this.restoreHudPosition();
+        // If no saved position and user didn't move it yet, try to avoid overlapping site controls
+        if (!this.settings.domains[this.domain]?.hudPos && !this.hudUserMoved) {
+          try { this.positionHudSafely(); } catch (e) {}
+        }
+        this.updateHUDState();
+        this.setupHudVisibilityListeners(container);
+        return;
+      }
+      this.injectHUDStyles();
+      this.hud = this.buildHUD();
+      container.appendChild(this.hud);
+      this.makeHUDDraggable();
+      this.restoreHudPosition();
+      if (!this.settings.domains[this.domain]?.hudPos && !this.hudUserMoved) {
+        try { this.positionHudSafely(); } catch (e) {}
+      }
+      this.updateHUDState();
+      this.setupHudVisibilityListeners(container);
+    } catch (e) {}
+  }
+
+  /** Inject or refresh HUD CSS (auto-hide + glassy style). */
+  injectHUDStyles() {
+    const css = `
+      .smart-skip-hud{position:absolute;right:16px;bottom:16px;z-index:2147483000;background:rgba(20,20,20,.75);backdrop-filter:saturate(1.2) blur(6px);color:#fff;border:1px solid rgba(255,255,255,.2);border-radius:10px;box-shadow:0 6px 16px rgba(0,0,0,.4);font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif;user-select:none;opacity:0;pointer-events:none;transform:translateY(6px);transition:opacity .2s ease, transform .2s ease}
+      .smart-skip-hud.visible{opacity:1;pointer-events:auto;transform:translateY(0)}
+      .smart-skip-hud .hud-header{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.12);cursor:move}
+      .smart-skip-hud .hud-title{font-size:12px;opacity:.85}
+      .smart-skip-hud .hud-spacer{flex:1 1 auto}
+      .smart-skip-hud .hud-icon{appearance:none;background:transparent;border:0;color:#fff;opacity:.85;cursor:pointer;font-size:14px;line-height:1;border-radius:6px;padding:2px 6px}
+      .smart-skip-hud .hud-icon:hover{opacity:1;background:rgba(255,255,255,.15)}
+      .smart-skip-hud .hud-close{appearance:none;background:transparent;border:0;color:#fff;opacity:.8;cursor:pointer;font-size:14px;line-height:1;border-radius:6px;padding:2px 6px}
+      .smart-skip-hud .hud-close:hover{opacity:1;background:rgba(255,255,255,.15)}
+      .smart-skip-hud .hud-body{display:flex;gap:10px;padding:10px}
+      .smart-skip-hud .group{display:flex;gap:8px;align-items:center}
+      .smart-skip-hud .group-advanced{display:none}
+      .smart-skip-hud.expanded .group-advanced{display:flex}
+      .smart-skip-hud button{appearance:none;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.08);color:#fff;border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer}
+      .smart-skip-hud button:hover{background:rgba(255,255,255,.18)}
+      .smart-skip-hud .toggle{display:flex;align-items:center;gap:6px;font-size:12px;opacity:.9;cursor:pointer}
+      .smart-skip-hud .toggle input{accent-color:#22c55e;cursor:pointer}
+      .smart-skip-countdown{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);backdrop-filter:blur(2px);z-index:2147483001}
+      .smart-skip-countdown .box{background:rgba(15,15,15,.85);border:1px solid rgba(255,255,255,.2);padding:14px 16px;border-radius:10px;display:flex;gap:10px;align-items:center}
+      .smart-skip-countdown .num{font-weight:700;font-size:16px;color:#fbbf24}
+      .smart-skip-countdown .txt{font-size:13px;opacity:.9}
+      .smart-skip-countdown .actions{margin-left:10px}
+      .smart-skip-countdown .actions button{padding:6px 10px}
+    `;
+    // If a style element already exists but is from an older version (without .visible or base opacity), update it
+    if (this.hudStyleEl) {
+      const text = this.hudStyleEl.textContent || '';
+      const hasVisible = text.includes('.smart-skip-hud.visible');
+      const hasOpacity = text.includes('opacity:0') && text.includes('pointer-events:none');
+      if (!hasVisible || !hasOpacity) {
+        try { this.hudStyleEl.textContent = css; } catch (e) {}
+      }
       return;
     }
+    const style = document.createElement('style');
+    style.textContent = css;
+    document.head.appendChild(style);
+    this.hudStyleEl = style;
+  }
+
+  /** Build the HUD DOM structure (compact primary + advanced group). */
+  buildHUD() {
+    const root = document.createElement('div');
+    root.className = 'smart-skip-hud';
+    root.innerHTML = `
+      <div class="hud-header"><span class="hud-title">Smart Skip</span><div class="hud-spacer"></div><button class="hud-icon" title="Mehr" data-action="toggle-advanced">⋯</button><button class="hud-close" title="HUD ausblenden" data-action="close">×</button></div>
+      <div class="hud-body">
+        <div class="group group-primary">
+          <button type="button" data-action="skip-now">Skip</button>
+          <button type="button" data-action="next">Next</button>
+        </div>
+        <div class="group group-advanced">
+          <button type="button" data-action="skip-recap">Skip Recap</button>
+          <label class="toggle"><input type="checkbox" data-toggle="intro">Intro</label>
+          <label class="toggle"><input type="checkbox" data-toggle="recap">Recap</label>
+          <label class="toggle"><input type="checkbox" data-toggle="credits">Credits</label>
+          <label class="toggle"><input type="checkbox" data-toggle="ads">Ads</label>
+          <label class="toggle"><input type="checkbox" data-toggle="autonext">AutoNext</label>
+        </div>
+      </div>
+    `;
+    this.attachHUDListeners(root);
+    return root;
+  }
+
+  /** Bind HUD events once: buttons, toggles, drag, and visibility handling. */
+  attachHUDListeners(root) {
+    if (root.dataset.bound) return; // prevent double-binding
+    root.dataset.bound = 'true';
+    const getSeriesKey = () => {
+      if (!this.currentSeries || !this.currentSeries.title) return null;
+      return `${this.domain}:${this.currentSeries.title}`;
+    };
+    const bySel = (sel) => root.querySelector(sel);
+
+    const btnSkip = bySel('button[data-action="skip-now"]');
+    const btnSkipRecap = bySel('button[data-action="skip-recap"]');
+    const btnNext = bySel('button[data-action="next"]');
+    if (btnSkip) btnSkip.addEventListener('click', () => this.triggerSkipNow());
+    if (btnSkipRecap) btnSkipRecap.addEventListener('click', () => this.triggerSkipType('recap'));
+    if (btnNext) btnNext.addEventListener('click', () => this.findAndClickNext());
+    const btnMore = bySel('button[data-action="toggle-advanced"]');
+    if (btnMore) btnMore.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const expanded = this.hud && this.hud.classList.contains('expanded');
+      if (expanded) {
+        this.hud.classList.remove('expanded');
+      } else {
+        this.hud.classList.add('expanded');
+      }
+      try {
+        if (!this.settings.domains[this.domain]) this.settings.domains[this.domain] = {};
+        this.settings.domains[this.domain].hudExpanded = this.hud.classList.contains('expanded');
+        this.saveSettings();
+      } catch (err) {}
+    });
+
+    const btnClose = bySel('.hud-close');
+    if (btnClose) btnClose.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        if (!this.settings.domains[this.domain]) this.settings.domains[this.domain] = {};
+        this.settings.domains[this.domain].hudEnabled = false;
+        this.saveSettings();
+      } catch (err) {}
+      this.destroyHUD();
+    });
+
+    // Keep HUD visible while interacting
+    root.addEventListener('mouseenter', () => {
+      this.hudInteracting = true;
+      this.showHUD();
+    });
+    root.addEventListener('mouseleave', () => {
+      this.hudInteracting = false;
+      this.scheduleHudAutoHide();
+    });
+
+    const toggles = root.querySelectorAll('input[type="checkbox"][data-toggle]');
+    toggles.forEach(input => {
+      input.addEventListener('change', () => {
+        const sk = getSeriesKey();
+        if (!sk) return;
+        if (!this.settings.series[sk]) {
+          this.settings.series[sk] = { skipIntro:true, skipRecap:true, skipCredits:true, skipAds:true, autoNext:false };
+        }
+        const map = { intro:'skipIntro', recap:'skipRecap', credits:'skipCredits', ads:'skipAds', autonext:'autoNext' };
+        const key = map[input.dataset.toggle];
+        if (key) {
+          this.settings.series[sk][key] = !!input.checked;
+          this.saveSettings();
+        }
+      });
+    });
+  }
+
+  /** Sync HUD toggle states and expanded state from settings for current series/domain. */
+  updateHUDState() {
+    if (!this.hud) return;
+    const sk = (this.currentSeries && this.currentSeries.title) ? `${this.domain}:${this.currentSeries.title}` : null;
+    const set = sk ? (this.settings.series[sk] || {}) : {};
+    const check = (name, def) => !!(set[name] !== undefined ? set[name] : def);
+    const map = { intro:check('skipIntro', true), recap:check('skipRecap', true), credits:check('skipCredits', true), ads:check('skipAds', true), autonext:check('autoNext', false) };
+    this.hud.querySelectorAll('input[type="checkbox"][data-toggle]').forEach(cb => {
+      const v = map[cb.dataset.toggle];
+      if (typeof v === 'boolean') cb.checked = v;
+      cb.disabled = !sk;
+    });
+    // Apply expanded/collapsed state from per-domain setting (default: collapsed/compact)
+    try {
+      const expanded = !!this.settings.domains[this.domain]?.hudExpanded;
+      if (expanded) this.hud.classList.add('expanded'); else this.hud.classList.remove('expanded');
+    } catch (e) {}
+  }
+
+  /** Make the HUD draggable within the player container, persisting the position. */
+  makeHUDDraggable() {
+    if (!this.hud) return;
+    if (this.hud.dataset.dragBound) return;
+    const header = this.hud.querySelector('.hud-header');
+    const root = this.hud;
+    if (!header) return;
+    const onDown = (e) => {
+      // Ignore drag when clicking close button
+      if (e && e.target && e.target.closest && e.target.closest('.hud-close')) return;
+      this.hudInteracting = true;
+      this.hudDragging = true;
+      const rect = root.getBoundingClientRect();
+      this.hudDragOffset.x = (e.clientX || 0) - rect.left;
+      this.hudDragOffset.y = (e.clientY || 0) - rect.top;
+      e.preventDefault();
+    };
+    const onMove = (e) => {
+      if (!this.hudDragging) return;
+      const container = this.getPlayerContainer();
+      const cRect = container.getBoundingClientRect();
+      let x = (e.clientX || 0) - cRect.left - this.hudDragOffset.x;
+      let y = (e.clientY || 0) - cRect.top - this.hudDragOffset.y;
+      x = Math.max(0, Math.min(x, cRect.width - root.offsetWidth));
+      y = Math.max(0, Math.min(y, cRect.height - root.offsetHeight));
+      root.style.left = x + 'px';
+      root.style.top = y + 'px';
+      root.style.right = 'auto';
+      root.style.bottom = 'auto';
+      this.showHUD();
+    };
+    const onUp = () => {
+      if (!this.hudDragging) return;
+      this.hudDragging = false;
+      this.hudInteracting = false;
+        this.hudUserMoved = true;
+      this.saveHudPosition();
+      this.scheduleHudAutoHide();
+    };
+    header.addEventListener('mousedown', onDown);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    this.hud.dataset.dragBound = 'true';
+  }
+
+  // Determine if HUD should be shown based on settings
+  /** Determine final HUD visibility from global + per-domain flags. */
+  isHudEnabled() {
+    try {
+      const domainSetting = this.settings.domains[this.domain]?.hudEnabled;
+      const globalSetting = this.settings.globalHudEnabled;
+      const global = (globalSetting === undefined ? true : !!globalSetting);
+      return (domainSetting !== undefined) ? !!domainSetting : global;
+    } catch (e) {
+      return true;
+    }
+  }
+
+  /**
+   * Attach auto-hide listeners on the player container.
+   * Rebind safely when the container changes; start hidden and reveal on mouse move.
+   */
+  setupHudVisibilityListeners(container) {
+    try {
+      if (!container) return;
+      if (this.hudBoundContainer === container && this._onHudMouseMove && this._onHudMouseLeave) return;
+      // Unbind old
+      if (this.hudBoundContainer && this._onHudMouseMove) {
+        try { this.hudBoundContainer.removeEventListener('mousemove', this._onHudMouseMove); } catch (e) {}
+      }
+      if (this.hudBoundContainer && this._onHudMouseLeave) {
+        try { this.hudBoundContainer.removeEventListener('mouseleave', this._onHudMouseLeave); } catch (e) {}
+      }
+      // Bind new
+      this._onHudMouseMove = () => {
+        if (!this.isHudEnabled()) return;
+        this.showHUDTemporarily();
+      };
+      this._onHudMouseLeave = () => {
+        this.scheduleHudAutoHide(600);
+      };
+      container.addEventListener('mousemove', this._onHudMouseMove);
+      container.addEventListener('mouseleave', this._onHudMouseLeave);
+      this.hudBoundContainer = container;
+      // Start hidden; will show on first move
+      this.hideHUD(true);
+    } catch (e) {}
+  }
+
+  showHUD() {
+    try { if (this.hud) this.hud.classList.add('visible'); } catch (e) {}
+  }
+
+  hideHUD(force = false) {
+    try {
+      if (!this.hud) return;
+      if (!force && this.hudInteracting) return;
+      this.hud.classList.remove('visible');
+    } catch (e) {}
+  }
+
+  showHUDTemporarily() {
+    this.showHUD();
+    this.scheduleHudAutoHide();
+  }
+
+  scheduleHudAutoHide(delayMs) {
+    try {
+      const d = typeof delayMs === 'number' ? delayMs : this.hudHideDelay;
+      if (this.hudHideTimeoutId) clearTimeout(this.hudHideTimeoutId);
+      this.hudHideTimeoutId = setTimeout(() => {
+        this.hideHUD();
+        this.hudHideTimeoutId = null;
+      }, d);
+    } catch (e) {}
+  }
+
+  destroyHUD() {
+    try {
+      if (this.hudHideTimeoutId) { clearTimeout(this.hudHideTimeoutId); this.hudHideTimeoutId = null; }
+      if (this.hudBoundContainer) {
+        try { if (this._onHudMouseMove) this.hudBoundContainer.removeEventListener('mousemove', this._onHudMouseMove); } catch (e) {}
+        try { if (this._onHudMouseLeave) this.hudBoundContainer.removeEventListener('mouseleave', this._onHudMouseLeave); } catch (e) {}
+        this.hudBoundContainer = null;
+      }
+      if (this.countdownOverlay && this.countdownOverlay.parentElement) {
+        this.countdownOverlay.remove();
+        this.countdownOverlay = null;
+      }
+      if (this.hud && this.hud.parentElement) {
+        this.hud.remove();
+      }
+      this.hud = null;
+      this.hudDragging = false;
+    } catch (e) {}
+  }
+
+  /** Restore HUD position from per-domain storage; default bottom-right. */
+  restoreHudPosition() {
+    try {
+      const pos = this.settings.domains[this.domain]?.hudPos;
+      if (!this.hud) return;
+      if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
+        this.hud.style.left = pos.x + 'px';
+        this.hud.style.top = pos.y + 'px';
+        this.hud.style.right = 'auto';
+        this.hud.style.bottom = 'auto';
+      } else {
+        this.hud.style.right = '16px';
+        this.hud.style.bottom = '16px';
+      }
+    } catch (e) {}
+  }
+
+  /** Persist HUD position relative to the player container. */
+  saveHudPosition() {
+    try {
+      if (!this.hud) return;
+      const rect = this.hud.getBoundingClientRect();
+      const container = this.getPlayerContainer();
+      const cRect = container.getBoundingClientRect();
+      const x = rect.left - cRect.left;
+      const y = rect.top - cRect.top;
+      if (!this.settings.domains[this.domain]) this.settings.domains[this.domain] = {};
+      this.settings.domains[this.domain].hudPos = { x, y };
+      this.saveSettings();
+    } catch (e) {}
+  }
+
+  // Try alternate corners to avoid overlapping native control bars or buttons
+  /** Try alternate corners to avoid overlapping native control bars/buttons. */
+  positionHudSafely() {
+    try {
+      if (!this.hud) return;
+      const container = this.getPlayerContainer();
+      if (!container) return;
+      const anchors = [
+        { right: 16, bottom: 16 },
+        { right: 16, top: 16 },
+        { left: 16, top: 16 },
+        { left: 16, bottom: 16 }
+      ];
+      const original = {
+        left: this.hud.style.left,
+        top: this.hud.style.top,
+        right: this.hud.style.right,
+        bottom: this.hud.style.bottom
+      };
+      const controls = this.getControlsRects(container);
+      const overlaps = (a, b, pad = 8) => {
+        return !(a.right + pad < b.left || a.left - pad > b.right || a.bottom + pad < b.top || a.top - pad > b.bottom);
+      };
+      const hitsAny = (r) => controls.some(c => overlaps(r, c));
+
+      // If current position is fine, keep it
+      let hudRect = this.hud.getBoundingClientRect();
+      if (!hitsAny(hudRect)) return;
+
+      for (const anchor of anchors) {
+        // Apply anchor
+        this.hud.style.left = (anchor.left != null ? anchor.left + 'px' : 'auto');
+        this.hud.style.top = (anchor.top != null ? anchor.top + 'px' : 'auto');
+        this.hud.style.right = (anchor.right != null ? anchor.right + 'px' : 'auto');
+        this.hud.style.bottom = (anchor.bottom != null ? anchor.bottom + 'px' : 'auto');
+        // Recalc rect
+        hudRect = this.hud.getBoundingClientRect();
+        if (!hitsAny(hudRect)) {
+          return; // found safe spot
+        }
+      }
+      // Restore if no anchor helped
+      this.hud.style.left = original.left;
+      this.hud.style.top = original.top;
+      this.hud.style.right = original.right;
+      this.hud.style.bottom = original.bottom;
+    } catch (e) {}
+  }
+
+  /** Collect rough rects of native control areas likely to collide with the HUD. */
+  getControlsRects(container) {
+    try {
+      const selectors = [
+        // YouTube
+        '#movie_player .ytp-chrome-bottom', '#movie_player .ytp-gradient-bottom', '.ytp-chrome-controls',
+        // Netflix and generic
+        '.watch-video--bottom-controls-container', '[data-uia*="control"]', '.player-controls', '.controls', '[class*="controls"]', '.control-bar', '.bottom-controls', '.vjs-control-bar'
+      ];
+      const rects = [];
+      selectors.forEach(sel => {
+        container.querySelectorAll(sel).forEach(el => {
+          const r = el.getBoundingClientRect();
+          if (r && r.width > 20 && r.height > 10) rects.push(r);
+        });
+      });
+      // Also consider any large button cluster near the bottom 25% of the container
+      const cRect = container.getBoundingClientRect();
+      const thresholdTop = cRect.top + cRect.height * 0.75;
+      container.querySelectorAll('button, [role="button"]').forEach(el => {
+        const r = el.getBoundingClientRect();
+        if (r.bottom >= thresholdTop && r.width > 20 && r.height > 10) rects.push(r);
+      });
+      return rects;
+    } catch (e) { return []; }
+  }
+
+  /** Force a scan and immediate click of any active skip buttons. */
+  triggerSkipNow() {
+    try {
+      const now = Date.now();
+      this.lastClickTime = now - this.clickCooldown - 1;
+      this.scanForButtons();
+    } catch (e) {}
+  }
+
+  /** Try to click a specific skip type (e.g., 'recap') via selectors then text/aria. */
+  triggerSkipType(type) {
+    try {
+      const container = this.getPlayerContainer();
+      if (!container) return false;
+      // First pass: selector-based
+      const selectors = this.buttonPatterns.selectors || [];
+      for (const selector of selectors) {
+        const buttons = container.querySelectorAll(selector);
+        for (const button of buttons) {
+          const bType = this.getButtonType(button, selector);
+          if (bType === type && this.isButtonClickable(button)) {
+            this.clickButton(button, `hud ${type}`);
+            return true;
+          }
+        }
+      }
+      // Second pass: text/aria-based
+      const all = container.querySelectorAll('button, [role="button"], a, div[onclick]');
+      for (const el of all) {
+        const bType = this.getButtonTypeFromText(el);
+        if (bType === type && this.shouldClickButton(el)) {
+          this.clickButton(el, `hud ${type}`);
+          return true;
+        }
+      }
+      return false;
+    } catch (e) { return false; }
+  }
+
+  /** Attempt to click the next-episode control via selectors, then text/aria. */
+  findAndClickNext() {
+    try {
+      const container = this.getPlayerContainer();
+      const selectors = this.buttonPatterns.selectors || [];
+      for (const selector of selectors) {
+        const buttons = container.querySelectorAll(selector);
+        for (const button of buttons) {
+          const type = this.getButtonType(button, selector);
+          if (type === 'next' && this.isButtonClickable(button)) {
+            this.clickButton(button, 'hud next');
+            return true;
+          }
+        }
+      }
+      const all = container.querySelectorAll('button, [role="button"], a, div[onclick]');
+      for (const el of all) {
+        const type = this.getButtonTypeFromText(el);
+        if (type === 'next' && this.shouldClickButton(el)) {
+          this.clickButton(el, 'hud next');
+          return true;
+        }
+      }
+      return false;
+    } catch (e) { return false; }
+  }
+
+  /** Display a cancelable auto-next countdown overlay before clicking next. */
+  showAutoNextCountdown(seconds = 5, onDone) {
+    try {
+      if (this.autoNextTimeoutId) {
+        clearTimeout(this.autoNextTimeoutId);
+        this.autoNextTimeoutId = null;
+      }
+      const container = this.getPlayerContainer();
+      if (!container) return;
+      if (this.countdownOverlay && this.countdownOverlay.parentElement) {
+        this.countdownOverlay.remove();
+      }
+      const overlay = document.createElement('div');
+      overlay.className = 'smart-skip-countdown';
+      overlay.innerHTML = `
+        <div class="box">
+          <span class="num" data-role="num">${seconds}</span>
+          <span class="txt">Nächste Folge in</span>
+          <div class="actions"><button type="button" data-action="cancel">Abbrechen</button></div>
+        </div>
+      `;
+      container.appendChild(overlay);
+      this.countdownOverlay = overlay;
+      let remaining = seconds;
+      const numEl = overlay.querySelector('[data-role="num"]');
+      const cleanup = () => {
+        if (this.autoNextTimeoutId) { clearTimeout(this.autoNextTimeoutId); this.autoNextTimeoutId = null; }
+        if (this.countdownOverlay && this.countdownOverlay.parentElement) { this.countdownOverlay.remove(); }
+        this.countdownOverlay = null;
+      };
+      const tick = () => {
+        remaining -= 1;
+        if (numEl) numEl.textContent = String(Math.max(0, remaining));
+        if (remaining <= 0) {
+          cleanup();
+          try { onDone && onDone(); } catch (e) {}
+        } else {
+          this.autoNextTimeoutId = setTimeout(tick, 1000);
+        }
+      };
+      const cancelBtn = overlay.querySelector('[data-action="cancel"]');
+      if (cancelBtn) cancelBtn.addEventListener('click', cleanup);
+      this.autoNextTimeoutId = setTimeout(tick, 1000);
+    } catch (e) {}
+  }
+  /** Initialization pipeline: detect language, load settings, wire observers, start. */
+  async init() {
+    // Initialization proceeds regardless of built-in supported platforms; actual enablement is controlled by settings
     
     this.detectedLanguage = this.detectPageLanguage();
     this.buttonPatterns = this.generateButtonPatterns();
     
     await this.loadSettings();
     
-    this.startSeriesDetection();
+  this.startSeriesDetection();
+  this.ensureHUD();
     
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       this.handleMessage(request, sender, sendResponse);
@@ -111,8 +745,10 @@ class VideoPlayerSkipper {
     });
   }
   
+  /** Load settings from storage with multi-layer fallbacks and set enable flags. */
   async loadSettings() {
     try {
+      if (!this.isExtensionContextValid()) return;
       let loadedSettings = null;
       let loadMethod = '';
       
@@ -163,7 +799,7 @@ class VideoPlayerSkipper {
         this.settings = { ...this.settings, ...loadedSettings };
       }
       
-      this.verboseLogging = this.settings.verboseLogging;
+  this.verboseLogging = this.settings.verboseLogging;
       
       const domainSetting = this.settings.domains[this.domain]?.enabled;
       if (domainSetting !== undefined) {
@@ -178,10 +814,12 @@ class VideoPlayerSkipper {
     }
   }
 
+  /** React to storage updates and hot-apply HUD enable/disable and runtime flags. */
   handleStorageChange(changes) {
     if (changes.skipperSettings) {
       const newSettings = changes.skipperSettings.newValue;
       if (newSettings) {
+        const prevHudEnabled = this.isHudEnabled();
         this.settings = { ...this.settings, ...newSettings };
         
         this.verboseLogging = this.settings.verboseLogging;
@@ -196,10 +834,19 @@ class VideoPlayerSkipper {
             this.start();
           }
         }
+
+        // Reflect HUD visibility changes live
+        const nextHudEnabled = this.isHudEnabled();
+        if (nextHudEnabled && !this.hud) {
+          this.ensureHUD();
+        } else if (!nextHudEnabled && this.hud) {
+          this.destroyHUD();
+        }
       }
     }
   }
   
+  /** Setup series detection loops and observers. */
   startSeriesDetection() {
     this.detectCurrentSeries();
     
@@ -213,6 +860,7 @@ class VideoPlayerSkipper {
     this.setupVideoEventDetection();
   }
   
+  /** Adjust series detection frequency based on current context. */
   updateSeriesCheckInterval() {
     if (this.seriesCheckInterval) {
       clearInterval(this.seriesCheckInterval);
@@ -254,6 +902,7 @@ class VideoPlayerSkipper {
     return result;
   }
   
+  /** Hook into SPA navigation APIs to re-detect series on URL changes. */
   setupUrlChangeDetection() {
     const originalPushState = history.pushState;
     const originalReplaceState = history.replaceState;
@@ -277,6 +926,7 @@ class VideoPlayerSkipper {
     });
   }
   
+  /** Observe DOM mutations for title/series indicators and debounce detection. */
   setupContentChangeDetection() {
     this.contentObserver = new MutationObserver((mutations) => {
       let shouldCheckSeries = false;
@@ -348,6 +998,7 @@ class VideoPlayerSkipper {
     });
   }
   
+  /** Heuristics: user clicks suggesting series change trigger re-detection. */
   setupButtonClickDetection() {
     document.addEventListener('click', (event) => {
       const target = event.target;
@@ -460,6 +1111,7 @@ class VideoPlayerSkipper {
     }, true);
   }
   
+  /** Listen to <video> lifecycle events to time series detection accurately. */
   setupVideoEventDetection() {
     const checkVideoEvents = () => {
       const videos = document.querySelectorAll('video');
@@ -525,6 +1177,7 @@ class VideoPlayerSkipper {
     this.videoObserver = videoObserver;
   }
   
+  /** Re-evaluate series when URL transitions occur, with gentle delay. */
   handleUrlChange() {
     const currentUrl = window.location.href;
     if (currentUrl !== this.lastUrl) {
@@ -543,6 +1196,7 @@ class VideoPlayerSkipper {
     }
   }
   
+  /** Coarse filter to distinguish content pages from browse/home. */
   isUrlContentPage(url) {
     if (!url) return false;
     
@@ -558,6 +1212,10 @@ class VideoPlayerSkipper {
     return isContentPage && !isBrowsePage;
   }
 
+  /**
+   * Core series detection orchestrator.
+   * Uses lightweight hashing to skip redundant runs and defers to domain-specific extractors.
+   */
   detectCurrentSeries() {
     const now = Date.now();
     if (this.verboseLogging) {
@@ -648,18 +1306,17 @@ class VideoPlayerSkipper {
         };
       }
       
-      this.currentSeries = newSeries;
+  this.currentSeries = newSeries;
       
-      this.updateSeriesCheckInterval();
+  this.updateSeriesCheckInterval();
+  try { this.updateHUDState(); } catch (e) {}
       
       if (newSeries) {
-        chrome.runtime.sendMessage({
+        this.safeRuntimeSendMessage({
           action: 'seriesDetected',
           series: newSeries,
           previousSeries: previousSeries,
           domain: this.domain
-        }).catch(error => {
-          // Silent fail
         });
         
         const seriesKey = `${this.domain}:${newSeries.title}`;
@@ -679,6 +1336,7 @@ class VideoPlayerSkipper {
     }
   }
 
+  /** Dispatch to domain extractors or generic fallback. */
   extractSeriesInfo() {
     const domain = this.domain;
 
@@ -715,6 +1373,7 @@ class VideoPlayerSkipper {
     }
   }
 
+  /** Netflix extractor: robust title/episode inference across pages. */
   extractNetflixSeries() {
     let title = null;
     let episode = null;
@@ -964,6 +1623,7 @@ class VideoPlayerSkipper {
     return null;
   }
 
+  /** Disney+ extractor. */
   extractDisneyPlusSeries() {
     let title = document.querySelector('[data-testid="series-title"]')?.textContent?.trim();
     if (!title) title = document.querySelector('.series-title')?.textContent?.trim();
@@ -999,6 +1659,7 @@ class VideoPlayerSkipper {
     return null;
   }
 
+  /** Prime Video extractor. */
   extractPrimeVideoSeries() {
     let title = document.querySelector('[data-automation-id="title"]')?.textContent?.trim();
     if (!title) title = document.querySelector('h1[data-automation-id="title"]')?.textContent?.trim();
@@ -1033,6 +1694,7 @@ class VideoPlayerSkipper {
     return null;
   }
 
+  /** YouTube extractor (treats single videos as a series-like unit). */
   extractYouTubeSeries() {
     let title = document.querySelector('#title h1')?.textContent?.trim();
     if (!title) title = document.querySelector('h1.ytd-video-primary-info-renderer')?.textContent?.trim();
@@ -1044,6 +1706,7 @@ class VideoPlayerSkipper {
     return null;
   }
 
+  /** Crunchyroll extractor. */
   extractCrunchyrollSeries() {
     let title = document.querySelector('[data-t="series-title"]')?.textContent?.trim();
     if (!title) title = document.querySelector('.series-title')?.textContent?.trim();
@@ -1070,6 +1733,7 @@ class VideoPlayerSkipper {
     return null;
   }
 
+  /** Apple TV+ extractor. */
   extractAppleTVSeries() {
     let title = document.querySelector('.product-header__title')?.textContent?.trim();
     if (!title) title = document.title?.replace(' - Apple TV+', '').trim();
@@ -1082,6 +1746,7 @@ class VideoPlayerSkipper {
     return null;
   }
 
+  /** Fallback extractor using document/title heuristics. */
   extractGenericSeries() {
     let title = document.querySelector('h1')?.textContent?.trim();
     if (!title) title = document.title?.split(' - ')[0]?.trim();
@@ -1092,14 +1757,17 @@ class VideoPlayerSkipper {
     return null;
   }
 
+  /** Persist current settings back to storage (sync → local fallback). */
   async saveSettings() {
     try {
       if (!this.settings || typeof this.settings !== 'object') {
         return;
       }
+      if (!this.isExtensionContextValid()) return;
       
       const validSettings = {
         globalEnabled: this.settings.globalEnabled !== undefined ? this.settings.globalEnabled : true,
+        globalHudEnabled: this.settings.globalHudEnabled !== undefined ? this.settings.globalHudEnabled : true,
         verboseLogging: this.settings.verboseLogging !== undefined ? this.settings.verboseLogging : false,
         domains: this.settings.domains || {},
         series: this.settings.series || {}
@@ -1115,6 +1783,7 @@ class VideoPlayerSkipper {
     }
   }
 
+  /** Handle messages from popup/background (detect, update settings, ping, etc.). */
   handleMessage(request, sender, sendResponse) {
     switch (request.action) {
       case 'detectSeries':
@@ -1129,12 +1798,13 @@ class VideoPlayerSkipper {
         
       case 'updateSettings':
         if (request.settings) {
+          const prevHud = this.isHudEnabled();
           this.settings = { ...this.settings, ...request.settings };
           this.verboseLogging = this.settings.verboseLogging;
-          
+
           const domainSetting = this.settings.domains[this.domain]?.enabled;
           const newEnabled = domainSetting !== undefined ? domainSetting : this.settings.globalEnabled;
-          
+
           if (newEnabled !== this.isEnabled) {
             this.isEnabled = newEnabled;
             this.stop();
@@ -1142,6 +1812,10 @@ class VideoPlayerSkipper {
               this.start();
             }
           }
+
+          const nextHud = this.isHudEnabled();
+          if (nextHud && !this.hud) this.ensureHUD();
+          if (!nextHud && this.hud) this.destroyHUD();
         }
         sendResponse({ success: true });
         break;
@@ -1160,6 +1834,7 @@ class VideoPlayerSkipper {
     }
   }
   
+  /** Begin scanning and observers when enabled. */
   start() {
     if (!this.isEnabled) return;
     
@@ -1183,8 +1858,11 @@ class VideoPlayerSkipper {
     if (typeof this.detectCurrentSeries === 'function') {
       this.detectCurrentSeries();
     }
+    // Ensure HUD reflects current visibility when starting observers
+    try { this.ensureHUD(); } catch (e) {}
   }
   
+  /** Stop observers/intervals to reduce overhead when disabled. */
   stop() {
     if (this.observer) {
       this.observer.disconnect();
@@ -1217,6 +1895,10 @@ class VideoPlayerSkipper {
     }
   }
   
+  /**
+   * Scan the player container for actionable buttons using selectors then text/aria.
+   * Applies timing and visibility guards to avoid false positives.
+   */
   scanForButtons() {
     if (!this.isEnabled) return;
     
@@ -1225,11 +1907,15 @@ class VideoPlayerSkipper {
       return;
     }
     
+    // Limit scanning to the video/player area to avoid touching large sidebars (e.g., YouTube recommendations)
+    const container = this.getPlayerContainer();
+    if (!container) return;
+
     const seriesSettings = this.getCurrentSeriesSettings();
     
     let clicked = false;
     for (const selector of this.buttonPatterns.selectors) {
-      const buttons = document.querySelectorAll(selector);
+      const buttons = container.querySelectorAll(selector);
       for (const button of buttons) {
         const buttonType = this.getButtonType(button, selector);
         if ((['intro','recap','credits','ads'].includes(buttonType))
@@ -1244,7 +1930,7 @@ class VideoPlayerSkipper {
       if (clicked) break;
     }
     if (!clicked) {
-      const allButtons = document.querySelectorAll('button, [role="button"], a, div[onclick]');
+      const allButtons = container.querySelectorAll('button, [role="button"], a, div[onclick]');
       for (const button of allButtons) {
         const buttonType = this.getButtonTypeFromText(button);
         if ((['intro','recap','credits','ads'].includes(buttonType))
@@ -1260,7 +1946,7 @@ class VideoPlayerSkipper {
 
     if (seriesSettings.autoNext) {
       for (const selector of this.buttonPatterns.selectors) {
-        const buttons = document.querySelectorAll(selector);
+        const buttons = container.querySelectorAll(selector);
         for (const button of buttons) {
           const buttonType = this.getButtonType(button, selector);
           if (buttonType === 'next'
@@ -1273,7 +1959,7 @@ class VideoPlayerSkipper {
           }
         }
       }
-      const allButtons = document.querySelectorAll('button, [role="button"], a, div[onclick]');
+      const allButtons = container.querySelectorAll('button, [role="button"], a, div[onclick]');
       for (const button of allButtons) {
         const buttonType = this.getButtonTypeFromText(button);
         if (buttonType === 'next'
@@ -1288,7 +1974,38 @@ class VideoPlayerSkipper {
       this.checkForAutoAdvancePopup();
     }
   }
+
+  // Try to scope queries to the actual player container to avoid touching sidebars (e.g., YouTube #secondary)
+  /** Try to scope actions to the most likely player container. */
+  getPlayerContainer() {
+    try {
+      // Prefer the nearest ancestor of a <video>
+      const video = document.querySelector('video');
+      if (video) {
+        let node = video;
+        for (let i = 0; i < 6 && node; i++) {
+          const cls = (node.className || '').toString().toLowerCase();
+          if (node.id === 'movie_player' || cls.includes('html5-video-player') || cls.includes('player') || cls.includes('video-player')) {
+            return node;
+          }
+          node = node.parentElement;
+        }
+        // fallback: use the closest section that contains the video element
+        return video.closest('#player, ytd-player, .player, .video-player') || video.parentElement || document.body;
+      }
+      // Domain-specific fallback for YouTube
+      if (window.location.hostname.includes('youtube.com')) {
+        const el = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+        if (el) return el;
+      }
+      // Last resort: restrict to main area if available
+      return document.querySelector('#player, .player, .video-player') || document.body;
+    } catch (e) {
+      return document.body;
+    }
+  }
   
+  /** Gather effective per-series settings (with defaults). */
   getCurrentSeriesSettings() {
     if (this.currentSeries && this.currentSeries.title) {
       const seriesKey = `${this.domain}:${this.currentSeries.title}`;
@@ -1316,6 +2033,7 @@ class VideoPlayerSkipper {
     };
   }
   
+  /** Classify a button by selector and textual/aria cues into intro/recap/credits/ads/next. */
   getButtonType(button, selector) {
     const text = (button.textContent || button.getAttribute('aria-label') || button.title || '').toLowerCase();
     const selectorLower = selector.toLowerCase();
@@ -1381,6 +2099,7 @@ class VideoPlayerSkipper {
     return 'unknown';
   }
   
+  /** Text/aria-only classifier as a secondary pass. */
   getButtonTypeFromText(button) {
     const text = (button.textContent || button.getAttribute('aria-label') || '').toLowerCase();
 
@@ -1393,6 +2112,7 @@ class VideoPlayerSkipper {
     return 'unknown';
   }
   
+  /** Decide whether a classified button type should be auto-clicked. */
   shouldSkipButtonType(buttonType, seriesSettings) {
     if (buttonType === 'watch-abspann' || buttonType === 'watch') {
       return false;
@@ -1409,6 +2129,7 @@ class VideoPlayerSkipper {
     }
   }
   
+  /** Detect platform auto-advance overlays and drive them with a countdown. */
   checkForAutoAdvancePopup() {
     const autoAdvanceSelectors = [
       '[data-uia="postplay-still-frame"]',
@@ -1423,7 +2144,14 @@ class VideoPlayerSkipper {
       if (popup) {
         const nextButton = popup.querySelector('button, [role="button"]');
         if (nextButton && this.isButtonClickable(nextButton)) {
-          this.clickButton(nextButton, `auto-advance popup (${selector})`);
+          // show cancelable countdown then click
+          this.showAutoNextCountdown(5, () => {
+            if (this.isButtonClickable(nextButton)) {
+              this.clickButton(nextButton, `auto-advance popup (${selector})`);
+            } else {
+              this.findAndClickNext();
+            }
+          });
           return;
         }
       }
@@ -1431,16 +2159,25 @@ class VideoPlayerSkipper {
   }
 
   // Placeholder methods that would be implemented
+  /** Detect page language (placeholder hooking to richer logic if needed). */
   detectPageLanguage() {
     return 'de';
   }
 
+  /** Provide platform-agnostic selector patterns, kept narrow to player area. */
   generateButtonPatterns() {
     // Narrower, player-scoped selectors to reduce false positives.
     return {
       selectors: [
         '[data-uia*="skip"]',
         '[data-uia*="next"]',
+        // Explicit recap/intro patterns to improve reliability on Netflix and others
+        '[data-uia*="recap"]',
+        '[data-uia*="previously"]',
+        '[data-uia="player-skip-recap"]',
+        '[data-uia="player-skip-intro"]',
+        'button[class*="skip-recap"], [class*="skip-recap"]',
+        'button[aria-label*="Recap"], button[aria-label*="Previously"], [aria-label*="Recap"], [aria-label*="Previously"]',
         '[data-testid*="skip"]',
         '[data-qa*="skip"]',
         'button[class*="skip"], button[class*="Skip"], .skip-button, .skipBtn, .skip',
@@ -1451,10 +2188,12 @@ class VideoPlayerSkipper {
     };
   }
 
+  /** Enable/disable verbose logging dynamically. */
   setVerboseLogging(enabled) {
     this.verboseLogging = enabled;
   }
 
+  /** Visibility/viewport checks to ensure the button is actionable. */
   isButtonClickable(button) {
     try {
       if (!button) return false;
@@ -1479,6 +2218,7 @@ class VideoPlayerSkipper {
     }
   }
 
+  /** Additional safety checks to avoid navigating links or non-control elements. */
   shouldClickButton(button) {
     // Don't click plain links that navigate away unless they are clearly skip/next controls
     try {
@@ -1534,6 +2274,7 @@ class VideoPlayerSkipper {
     return true;
   }
 
+  /** Click the element safely and log the action via background for telemetry. */
   clickButton(button, reason) {
     if (!button || !this.isButtonClickable(button)) return;
     
@@ -1542,13 +2283,11 @@ class VideoPlayerSkipper {
     try {
       button.click();
       
-      chrome.runtime.sendMessage({
+      this.safeRuntimeSendMessage({
         action: 'buttonClicked',
         buttonText: button.textContent || button.getAttribute('aria-label') || 'Unknown',
         domain: this.domain,
         reason: reason
-      }).catch(() => {
-        // Silent fail
       });
     } catch (error) {
       // Silent fail
@@ -1558,8 +2297,12 @@ class VideoPlayerSkipper {
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
-    window.videoPlayerSkipper = new VideoPlayerSkipper();
+    if (!window.videoPlayerSkipper || !(window.videoPlayerSkipper instanceof VideoPlayerSkipper)) {
+      window.videoPlayerSkipper = new VideoPlayerSkipper();
+    }
   });
 } else {
-  window.videoPlayerSkipper = new VideoPlayerSkipper();
+  if (!window.videoPlayerSkipper || !(window.videoPlayerSkipper instanceof VideoPlayerSkipper)) {
+    window.videoPlayerSkipper = new VideoPlayerSkipper();
+  }
 }

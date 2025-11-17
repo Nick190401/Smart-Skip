@@ -1,0 +1,64 @@
+name: Version bump check
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine changed files
+        id: changes
+        run: |
+          BASE_REF="${{ github.base_ref }}"
+          git fetch origin "$BASE_REF":"refs/remotes/origin/$BASE_REF"
+          CHANGED=$(git diff --name-only "origin/$BASE_REF"...HEAD)
+          echo "changed<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Decide if core files changed
+        id: core
+        run: |
+          CHANGED="${{ steps.changes.outputs.changed }}"
+          echo "$CHANGED" | tr ' ' '\n' | sed '/^$/d' > changed.txt
+          if grep -E '^(src/|manifest\.json|assets/)' changed.txt >/dev/null; then
+            echo "core_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "core_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check manifest version bump when core changed
+        if: steps.core.outputs.core_changed == 'true'
+        run: |
+          set -e
+          BASE_REF="${{ github.base_ref }}"
+          # Extract versions
+          OLD_VER=$(git show "origin/$BASE_REF:manifest.json" | jq -r '.version')
+          NEW_VER=$(cat manifest.json | jq -r '.version')
+          echo "Old version: $OLD_VER"
+          echo "New version: $NEW_VER"
+          if [ -z "$OLD_VER" ] || [ -z "$NEW_VER" ]; then
+            echo "::error::Unable to read version from manifest.json"
+            exit 1
+          fi
+          if [ "$OLD_VER" = "$NEW_VER" ]; then
+            echo "::error::Core files changed but manifest.json version was not bumped"
+            exit 1
+          fi
+
+      - name: Check README badge matches manifest version
+        if: steps.core.outputs.core_changed == 'true'
+        run: |
+          NEW_VER=$(cat manifest.json | jq -r '.version')
+          if ! grep -q "version-$NEW_VER" README.md; then
+            echo "::error::README version badge does not match manifest version ($NEW_VER)"
+            echo "Please update the badge: [![Version](https://img.shields.io/badge/version-$NEW_VER-...)]"
+            exit 1
+          fi

@@ -1,10 +1,20 @@
+/**
+ * Background Service Worker (MV3)
+ * - Initializes default settings
+ * - Handles runtime messages (seriesDetected, settings ops, script injection)
+ * - Bridges storage (sync/local) with safe fallbacks
+ */
+
 const DEFAULT_SETTINGS = {
   globalEnabled: true,
+  // Global HUD visibility; domains[domain].hudEnabled may override per-domain
+  globalHudEnabled: true,
   verboseLogging: false,
   domains: {},
   series: {}
 };
 
+// Initialize settings on install/update and migrate legacy shapes
 chrome.runtime.onInstalled.addListener(async (details) => {
   try {
     const result = await chrome.storage.sync.get(['skipperSettings']);
@@ -22,6 +32,12 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       
       if (!settings.domains) {
         settings.domains = {};
+        needsUpdate = true;
+      }
+
+      // Backfill missing globalHudEnabled with default true
+      if (settings.globalHudEnabled === undefined) {
+        settings.globalHudEnabled = true;
         needsUpdate = true;
       }
       
@@ -45,6 +61,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 });
 
 
+// Central message dispatcher
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   handleMessage(request, sender, sendResponse);
   return true;
@@ -63,13 +80,19 @@ async function handleMessage(request, sender, sendResponse) {
         sendResponse({ success: true });
         break;
         
-      case 'getSettings':
+      case 'getSettings': {
         const settings = await getSettings();
         sendResponse({ settings });
         break;
+      }
         
       case 'saveSettings':
         await saveSettings(request.settings);
+        sendResponse({ success: true });
+        break;
+      
+      case 'injectContentScripts':
+        await injectContentScripts(request.tabId);
         sendResponse({ success: true });
         break;
         
@@ -85,6 +108,9 @@ async function handleButtonClicked(request, sender) {
   // No action needed
 }
 
+/**
+ * Persist lightweight series presence meta to keep last seen shows.
+ */
 async function handleSeriesDetected(request, sender) {
   try {
     const { series, domain } = request;
@@ -107,11 +133,21 @@ async function handleSeriesDetected(request, sender) {
       settings.series[seriesKey].lastSeen = new Date().toISOString();
       await saveSettings(settings);
     }
+
+    // Broadcast live update to any open popups or listeners
+    try {
+      chrome.runtime.sendMessage({ action: 'seriesDetected', series, domain });
+    } catch (e) {
+      // Silent fail
+    }
   } catch (error) {
     // Silent fail
   }
 }
 
+/**
+ * Load settings with sync → local fallbacks and default hydration.
+ */
 async function getSettings() {
   try {
     let result = await chrome.storage.sync.get(['skipperSettings']);
@@ -124,6 +160,7 @@ async function getSettings() {
       const settings = result.skipperSettings;
       return {
         globalEnabled: settings.globalEnabled !== undefined ? settings.globalEnabled : true,
+        globalHudEnabled: settings.globalHudEnabled !== undefined ? settings.globalHudEnabled : true,
         verboseLogging: settings.verboseLogging !== undefined ? settings.verboseLogging : false,
         domains: settings.domains || {},
         series: settings.series || {}
@@ -136,6 +173,9 @@ async function getSettings() {
   }
 }
 
+/**
+ * Save validated settings shape to sync storage (fallback to local on error).
+ */
 async function saveSettings(settings) {
   try {
     if (!settings || typeof settings !== 'object') {
@@ -144,6 +184,7 @@ async function saveSettings(settings) {
     
     const validSettings = {
       globalEnabled: settings.globalEnabled !== undefined ? settings.globalEnabled : true,
+      globalHudEnabled: settings.globalHudEnabled !== undefined ? settings.globalHudEnabled : true,
       verboseLogging: settings.verboseLogging !== undefined ? settings.verboseLogging : false,
       domains: settings.domains || {},
       series: settings.series || {}
@@ -156,6 +197,28 @@ async function saveSettings(settings) {
     }
   } catch (error) {
     throw error;
+  }
+}
+
+/**
+ * Programmatically inject required scripts into a given tab.
+ * Used for unsupported domains when user overrides via popup.
+ */
+async function injectContentScripts(tabId) {
+  try {
+    if (!tabId) throw new Error('No tabId provided');
+    // Inject language manager first
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['src/shared/language.js']
+    });
+    // Then inject the skipper
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['src/content/skipper.js']
+    });
+  } catch (e) {
+    throw e;
   }
 }
 
