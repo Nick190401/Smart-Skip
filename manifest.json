@@ -6,7 +6,11 @@
   
   "browser_specific_settings": {
     "gecko": {
-      "id": "smart-skip@extension.local"
+      "id": "smart-skip@extension.local",
+      "strict_min_version": "109.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
     }
   },
   
@@ -40,7 +44,7 @@
     "*://*.amazon.ae/*",
     "*://*.amazon.sa/*",
     "*://*.amazon.eg/*",
-  "*://*.primevideo.com/*",
+    "*://*.primevideo.com/*",
     "*://*.crunchyroll.com/*",
     "*://*.hulu.com/*",
     "*://*.apple.com/*",
@@ -85,7 +89,7 @@
         "*://*.amazon.ae/*",
         "*://*.amazon.sa/*",
         "*://*.amazon.eg/*",
-       "*://*.primevideo.com/*",
+        "*://*.primevideo.com/*",
         "*://*.crunchyroll.com/*",
         "*://*.hulu.com/*",
         "*://*.apple.com/*",
@@ -124,6 +128,8 @@
   },
   
   "background": {
-    "service_worker": "src/background/background.js"
+    "scripts": [
+      "src/background/background.js"
+    ]
   }
 }

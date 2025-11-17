@@ -239,23 +239,80 @@ class VideoPlayerSkipper {
   buildHUD() {
     const root = document.createElement('div');
     root.className = 'smart-skip-hud';
-    root.innerHTML = `
-      <div class="hud-header"><span class="hud-title">Smart Skip</span><div class="hud-spacer"></div><button class="hud-icon" title="Mehr" data-action="toggle-advanced">⋯</button><button class="hud-close" title="HUD ausblenden" data-action="close">×</button></div>
-      <div class="hud-body">
-        <div class="group group-primary">
-          <button type="button" data-action="skip-now">Skip</button>
-          <button type="button" data-action="next">Next</button>
-        </div>
-        <div class="group group-advanced">
-          <button type="button" data-action="skip-recap">Skip Recap</button>
-          <label class="toggle"><input type="checkbox" data-toggle="intro">Intro</label>
-          <label class="toggle"><input type="checkbox" data-toggle="recap">Recap</label>
-          <label class="toggle"><input type="checkbox" data-toggle="credits">Credits</label>
-          <label class="toggle"><input type="checkbox" data-toggle="ads">Ads</label>
-          <label class="toggle"><input type="checkbox" data-toggle="autonext">AutoNext</label>
-        </div>
-      </div>
-    `;
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'hud-header';
+    const title = document.createElement('span');
+    title.className = 'hud-title';
+    title.textContent = 'Smart Skip';
+    const spacer = document.createElement('div');
+    spacer.className = 'hud-spacer';
+    const btnMore = document.createElement('button');
+    btnMore.className = 'hud-icon';
+    btnMore.title = 'Mehr';
+    btnMore.setAttribute('data-action', 'toggle-advanced');
+    btnMore.textContent = '⋯';
+    const btnClose = document.createElement('button');
+    btnClose.className = 'hud-close';
+    btnClose.title = 'HUD ausblenden';
+    btnClose.setAttribute('data-action', 'close');
+    btnClose.textContent = '×';
+    header.appendChild(title);
+    header.appendChild(spacer);
+    header.appendChild(btnMore);
+    header.appendChild(btnClose);
+
+    // Body
+    const body = document.createElement('div');
+    body.className = 'hud-body';
+
+    const groupPrimary = document.createElement('div');
+    groupPrimary.className = 'group group-primary';
+    const btnSkip = document.createElement('button');
+    btnSkip.type = 'button';
+    btnSkip.setAttribute('data-action', 'skip-now');
+    btnSkip.textContent = 'Skip';
+    const btnNext = document.createElement('button');
+    btnNext.type = 'button';
+    btnNext.setAttribute('data-action', 'next');
+    btnNext.textContent = 'Next';
+    groupPrimary.appendChild(btnSkip);
+    groupPrimary.appendChild(btnNext);
+
+    const groupAdvanced = document.createElement('div');
+    groupAdvanced.className = 'group group-advanced';
+
+    const btnSkipRecap = document.createElement('button');
+    btnSkipRecap.type = 'button';
+    btnSkipRecap.setAttribute('data-action', 'skip-recap');
+    btnSkipRecap.textContent = 'Skip Recap';
+    groupAdvanced.appendChild(btnSkipRecap);
+
+    const mkToggle = (key, labelText) => {
+      const label = document.createElement('label');
+      label.className = 'toggle';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.setAttribute('data-toggle', key);
+      const text = document.createTextNode(labelText);
+      label.appendChild(input);
+      label.appendChild(text);
+      return label;
+    };
+
+    groupAdvanced.appendChild(mkToggle('intro', 'Intro'));
+    groupAdvanced.appendChild(mkToggle('recap', 'Recap'));
+    groupAdvanced.appendChild(mkToggle('credits', 'Credits'));
+    groupAdvanced.appendChild(mkToggle('ads', 'Ads'));
+    groupAdvanced.appendChild(mkToggle('autonext', 'AutoNext'));
+
+    body.appendChild(groupPrimary);
+    body.appendChild(groupAdvanced);
+
+    root.appendChild(header);
+    root.appendChild(body);
+
     this.attachHUDListeners(root);
     return root;
   }
@@ -677,17 +734,35 @@ class VideoPlayerSkipper {
       }
       const overlay = document.createElement('div');
       overlay.className = 'smart-skip-countdown';
-      overlay.innerHTML = `
-        <div class="box">
-          <span class="num" data-role="num">${seconds}</span>
-          <span class="txt">Nächste Folge in</span>
-          <div class="actions"><button type="button" data-action="cancel">Abbrechen</button></div>
-        </div>
-      `;
+
+      const box = document.createElement('div');
+      box.className = 'box';
+
+      const num = document.createElement('span');
+      num.className = 'num';
+      num.setAttribute('data-role', 'num');
+      num.textContent = String(seconds);
+
+      const txt = document.createElement('span');
+      txt.className = 'txt';
+      txt.textContent = 'Nächste Folge in';
+
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.setAttribute('data-action', 'cancel');
+      cancelBtn.textContent = 'Abbrechen';
+      actions.appendChild(cancelBtn);
+
+      box.appendChild(num);
+      box.appendChild(txt);
+      box.appendChild(actions);
+      overlay.appendChild(box);
       container.appendChild(overlay);
       this.countdownOverlay = overlay;
       let remaining = seconds;
-      const numEl = overlay.querySelector('[data-role="num"]');
+      const numEl = num;
       const cleanup = () => {
         if (this.autoNextTimeoutId) { clearTimeout(this.autoNextTimeoutId); this.autoNextTimeoutId = null; }
         if (this.countdownOverlay && this.countdownOverlay.parentElement) { this.countdownOverlay.remove(); }
@@ -703,8 +778,7 @@ class VideoPlayerSkipper {
           this.autoNextTimeoutId = setTimeout(tick, 1000);
         }
       };
-      const cancelBtn = overlay.querySelector('[data-action="cancel"]');
-      if (cancelBtn) cancelBtn.addEventListener('click', cleanup);
+      cancelBtn.addEventListener('click', cleanup);
       this.autoNextTimeoutId = setTimeout(tick, 1000);
     } catch (e) {}
   }
