@@ -163,7 +163,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.url) {
     const streamingSites = [
       'netflix.com', 'disneyplus.com', 'primevideo.com', 'amazon.com',
-      'youtube.com', 'crunchyroll.com', 'tv.apple.com', 'hulu.com',
+      'crunchyroll.com', 'tv.apple.com', 'hulu.com',
       'hbo.com', 'peacocktv.com', 'paramount.com'
     ];
     

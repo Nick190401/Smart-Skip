@@ -22,10 +22,8 @@ class VideoPlayerSkipper {
       'disneyplus.',
       'disney.',
       'amazon.',
-      'primevideo.',
-      'youtube.',
-      'youtu.be',
-      'crunchyroll.',
+  'primevideo.',
+  'crunchyroll.',
       'hulu.com',
       'peacocktv.com',
       'paramountplus.com',
@@ -562,6 +560,11 @@ class VideoPlayerSkipper {
 
   detectCurrentSeries() {
     const now = Date.now();
+    if (this.verboseLogging) {
+      try {
+        console.log('[Skipper] detectCurrentSeries called', { url: window.location.href, lastUrl: this.lastUrl, currentSeries: this.currentSeries });
+      } catch (e) {}
+    }
     const currentUrl = window.location.href;
     
     const hasVideo = document.querySelector('video') !== null;
@@ -580,6 +583,11 @@ class VideoPlayerSkipper {
     this.lastDomStateHash = domStateHash;
     
     const newSeries = this.extractSeriesInfo();
+    if (this.verboseLogging) {
+      try {
+        console.log('[Skipper] extractSeriesInfo =>', newSeries);
+      } catch (e) {}
+    }
     
     const isOnTitlePage = window.location.href.includes('/title/') && 
                          !window.location.href.includes('/watch/');
@@ -673,24 +681,36 @@ class VideoPlayerSkipper {
 
   extractSeriesInfo() {
     const domain = this.domain;
-    
+
     try {
+      if (this.verboseLogging) {
+        console.log('[Skipper] extractSeriesInfo for domain', domain);
+      }
+
       if (domain.includes('netflix.com')) {
+        if (this.verboseLogging) console.log('[Skipper] using Netflix extractor');
         return this.extractNetflixSeries();
       } else if (domain.includes('disneyplus.com') || domain.includes('disney.com')) {
+        if (this.verboseLogging) console.log('[Skipper] using Disney+ extractor');
         return this.extractDisneyPlusSeries();
       } else if (domain.includes('primevideo.com') || domain.includes('amazon.')) {
+        if (this.verboseLogging) console.log('[Skipper] using Prime Video extractor');
         return this.extractPrimeVideoSeries();
       } else if (domain.includes('youtube.com')) {
+        if (this.verboseLogging) console.log('[Skipper] using YouTube extractor');
         return this.extractYouTubeSeries();
       } else if (domain.includes('crunchyroll.com')) {
+        if (this.verboseLogging) console.log('[Skipper] using Crunchyroll extractor');
         return this.extractCrunchyrollSeries();
       } else if (domain.includes('apple.com')) {
+        if (this.verboseLogging) console.log('[Skipper] using Apple TV extractor');
         return this.extractAppleTVSeries();
       } else {
+        if (this.verboseLogging) console.log('[Skipper] using Generic extractor');
         return this.extractGenericSeries();
       }
     } catch (error) {
+      if (this.verboseLogging) console.error('[Skipper] extractSeriesInfo error', error);
       return null;
     }
   }
@@ -1416,13 +1436,17 @@ class VideoPlayerSkipper {
   }
 
   generateButtonPatterns() {
+    // Narrower, player-scoped selectors to reduce false positives.
     return {
       selectors: [
         '[data-uia*="skip"]',
         '[data-uia*="next"]',
         '[data-testid*="skip"]',
-        '.skip-button',
-        '.next-button'
+        '[data-qa*="skip"]',
+        'button[class*="skip"], button[class*="Skip"], .skip-button, .skipBtn, .skip',
+        'button[class*="next"], .next-button, .nextBtn, .player-controls button',
+        // generic player wrappers
+        '.player .skip-button, .player .next-button, .video-player .skip-button'
       ]
     };
   }
@@ -1432,15 +1456,78 @@ class VideoPlayerSkipper {
   }
 
   isButtonClickable(button) {
-    return button && 
-           button.offsetParent !== null && 
-           !button.disabled &&
-           button.style.display !== 'none' &&
-           button.style.visibility !== 'hidden';
+    try {
+      if (!button) return false;
+
+      // Basic checks
+      if (button.disabled) return false;
+
+      const style = window.getComputedStyle(button);
+      if (!style || style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;
+
+      // Must have some layout size and be in the viewport
+      const rect = button.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return false;
+      if (rect.bottom <= 0 || rect.top >= (window.innerHeight || document.documentElement.clientHeight)) return false;
+
+      // offsetParent null indicates not displayed in many browsers, keep as fallback
+      if (button.offsetParent === null && style.position !== 'fixed') return false;
+
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   shouldClickButton(button) {
-    return this.isButtonClickable(button);
+    // Don't click plain links that navigate away unless they are clearly skip/next controls
+    try {
+      if (!this.isButtonClickable(button)) return false;
+
+      const tag = (button.tagName || '').toLowerCase();
+      const href = button.getAttribute && button.getAttribute('href');
+      const hasOnclick = !!(button.getAttribute && button.getAttribute('onclick'));
+
+      // If it's a link without an onclick handler and it would navigate away, avoid clicking it
+      if (tag === 'a' && href && !hasOnclick) {
+        // allow anchors that are fragment links or javascript pseudo-links
+        if (!href.startsWith('#') && !href.startsWith('javascript:')) {
+          return false;
+        }
+      }
+
+      // If the button text/aria doesn't indicate a skip/next/credits/ad, require explicit data attributes
+      const text = (button.textContent || button.getAttribute && button.getAttribute('aria-label') || '').toLowerCase();
+      const dataAttrs = (button.getAttribute && (
+        button.getAttribute('data-uia') || button.getAttribute('data-testid') || button.getAttribute('data-qa') || button.getAttribute('data-automation-id')
+      ) || '').toLowerCase();
+
+      const looksLikeControl = /skip|intro|opening|recap|previously|credits|abspann|ad|werbung|next|weiter|continue|nächste/.test(text + ' ' + dataAttrs);
+
+      if (looksLikeControl) return true;
+
+      // Allow clicking if element explicitly contains skip/next attributes even when text isn't present
+      if (dataAttrs && /(skip|next|postplay|autoplay|postplay)/.test(dataAttrs)) return true;
+
+      // As a last resort, require proximity to a video element to reduce false positives
+      const nearVideo = !!(button.closest && (button.closest('.player') || button.closest('.video-player') || button.closest('[data-uia*="player"]')));
+      if (nearVideo) return true;
+
+      // also check if a video exists nearby (within document) and the button is inside a container that also contains a video
+      let ancestor = button.parentElement;
+      let levels = 0;
+      while (ancestor && levels < 4) {
+        if (ancestor.querySelector && ancestor.querySelector('video')) {
+          return true;
+        }
+        ancestor = ancestor.parentElement;
+        levels++;
+      }
+
+      return false;
+    } catch (e) {
+      return false;
+    }
   }
 
   shouldClickBasedOnTiming(button) {

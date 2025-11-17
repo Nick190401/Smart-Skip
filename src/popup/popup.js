@@ -25,6 +25,78 @@ class PopupManager {
     this.applyTranslations();
   }
 
+  // Helper: resolve first existing element by id list
+  resolveElementByIds(...ids) {
+    for (const id of ids) {
+      if (!id) continue;
+      let el = null;
+      if (id.startsWith('.')) {
+        el = document.querySelector(id);
+      } else if (id.startsWith('#')) {
+        el = document.getElementById(id.slice(1));
+      } else {
+        el = document.getElementById(id);
+      }
+      if (el) return el;
+    }
+    return null;
+  }
+
+  elementForSetting(setting) {
+    // try native id first, then prefixed 'current' variant
+    const camel = setting.charAt(0).toUpperCase() + setting.slice(1);
+    return this.resolveElementByIds(setting, `current${camel}`);
+  }
+
+  elementForSeriesName() {
+    return this.resolveElementByIds('seriesName', 'currentSeriesTitle');
+  }
+
+  elementForSeriesEpisode() {
+    return this.resolveElementByIds('seriesEpisode', 'currentSeriesInfo');
+  }
+
+  elementForSeriesSection() {
+    return this.resolveElementByIds('.series-section', '#currentSeriesSection');
+  }
+
+  elementForReloadButton() {
+    return this.resolveElementByIds('reloadButton', 'reloadBtn');
+  }
+
+  elementForStatus() {
+    return this.resolveElementByIds('status', 'statusMessage');
+  }
+
+  // Toggle helpers: works with input[type=checkbox] or div-based toggles
+  setToggleState(el, state) {
+    if (!el) return;
+    if (el.tagName === 'INPUT' && el.type === 'checkbox') {
+      el.checked = !!state;
+    } else {
+      if (state) el.classList.add('active'); else el.classList.remove('active');
+    }
+  }
+
+  getToggleState(el) {
+    if (!el) return false;
+    if (el.tagName === 'INPUT' && el.type === 'checkbox') return !!el.checked;
+    return el.classList ? el.classList.contains('active') : false;
+  }
+
+  addToggleListener(el, callback) {
+    if (!el) return;
+    if (el.tagName === 'INPUT' && el.type === 'checkbox') {
+      el.addEventListener('change', (e) => callback(!!e.target.checked));
+    } else {
+      el.addEventListener('click', () => {
+        const newState = !this.getToggleState(el);
+        this.setToggleState(el, newState);
+        callback(newState);
+      });
+    }
+  }
+
   async loadSettings() {
     try {
       let loadedSettings = null;
@@ -176,8 +248,6 @@ class PopupManager {
         'disney.',
         'amazon.',
         'primevideo.',
-        'youtube.',
-        'youtu.be',
         'crunchyroll.',
         'hulu.com',
         'peacocktv.com',
@@ -249,38 +319,63 @@ class PopupManager {
   }
 
   setupEventListeners() {
-    document.getElementById('globalEnabled').addEventListener('change', (e) => {
-      this.settings.globalEnabled = e.target.checked;
+    const globalToggleEl = this.resolveElementByIds('globalEnabled', 'globalToggle');
+    this.addToggleListener(globalToggleEl, (checked) => {
+      this.settings.globalEnabled = checked;
       this.saveSettings();
       this.updateUI();
     });
 
-    document.getElementById('domainEnabled').addEventListener('change', (e) => {
-      if (!this.settings.domains[this.currentDomain]) {
-        this.settings.domains[this.currentDomain] = {};
-      }
-      this.settings.domains[this.currentDomain].enabled = e.target.checked;
+    const domainToggleEl = this.resolveElementByIds('domainEnabled', 'domainToggle');
+    this.addToggleListener(domainToggleEl, (checked) => {
+      if (!this.settings.domains[this.currentDomain]) this.settings.domains[this.currentDomain] = {};
+      this.settings.domains[this.currentDomain].enabled = checked;
       this.saveSettings();
       this.updateUI();
     });
 
     const skipSettings = ['skipIntro', 'skipRecap', 'skipCredits', 'skipAds', 'autoNext'];
-    
     skipSettings.forEach(setting => {
-      const checkbox = document.getElementById(setting);
+      const checkbox = this.elementForSetting(setting);
       if (checkbox) {
         checkbox.addEventListener('change', (e) => {
-          this.updateSeriesSetting(setting, e.target.checked);
+          this.updateSeriesSetting(setting, !!e.target.checked);
         });
       }
     });
 
-    document.getElementById('reloadButton').addEventListener('click', () => {
-      this.detectCurrentSeries().then(() => {
-        this.updateUI();
-        this.showStatus('Neu geladen', 'success');
+    const reloadButton = this.elementForReloadButton();
+    if (reloadButton) {
+      reloadButton.addEventListener('click', async () => {
+        try {
+          // Try to reload the active tab to get a fresh page state, then re-detect context
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (tab && tab.id) {
+            try {
+              chrome.tabs.reload(tab.id, () => {
+                // After reload, re-evaluate context in popup
+                setTimeout(() => {
+                  this.detectCurrentContext().then(() => {
+                    this.updateUI();
+                    this.showStatus('Seite neu geladen', 'success');
+                  });
+                }, 500);
+              });
+              return;
+            } catch (reloadErr) {
+              // fallback to re-detect without full reload
+            }
+          }
+
+          // If reload not possible, at least re-run detection
+          await this.detectCurrentSeries();
+          this.updateUI();
+          this.showStatus('Neu geladen', 'success');
+        } catch (e) {
+          this.showStatus('Neuladen fehlgeschlagen', 'error');
+        }
       });
-    });
+    }
   }
 
   updateSeriesSetting(setting, value) {
@@ -316,48 +411,63 @@ class PopupManager {
   showUnsupportedSite() {
     const mainContent = document.querySelector('.main-content');
     const unsupportedContent = document.querySelector('.unsupported-content');
-    
-    mainContent.style.display = 'none';
-    unsupportedContent.style.display = 'block';
+    if (mainContent) mainContent.style.display = 'none';
+    if (unsupportedContent) unsupportedContent.style.display = 'block';
+    try { document.body.classList.add('compact-mode'); } catch (e) {}
+
+    // wire the unsupported reload button if present
+    const reloadUnsupported = document.getElementById('reloadBtnUnsupported');
+    if (reloadUnsupported && !reloadUnsupported.dataset.bound) {
+      reloadUnsupported.addEventListener('click', () => {
+        // try re-detecting context
+        this.detectCurrentContext().then(() => {
+          this.updateUI();
+          this.showStatus('Neu geladen', 'success');
+        });
+      });
+      reloadUnsupported.dataset.bound = 'true';
+    }
   }
 
   showSupportedSite() {
     const mainContent = document.querySelector('.main-content');
     const unsupportedContent = document.querySelector('.unsupported-content');
-    
-    mainContent.style.display = 'block';
-    unsupportedContent.style.display = 'none';
+    if (mainContent) mainContent.style.display = 'block';
+    if (unsupportedContent) unsupportedContent.style.display = 'none';
+    try { document.body.classList.remove('compact-mode'); } catch (e) {}
   }
 
   updateSettingsUI() {
-    const globalCheckbox = document.getElementById('globalEnabled');
-    const domainCheckbox = document.getElementById('domainEnabled');
-    
-    globalCheckbox.checked = this.settings.globalEnabled;
-    
-    const domainSetting = this.settings.domains[this.currentDomain]?.enabled;
-    if (domainSetting !== undefined) {
-      domainCheckbox.checked = domainSetting;
-      domainCheckbox.indeterminate = false;
-    } else {
-      domainCheckbox.checked = this.settings.globalEnabled;
-      domainCheckbox.indeterminate = true;
+    const globalCheckbox = this.resolveElementByIds('globalEnabled', 'globalToggle');
+    const domainCheckbox = this.resolveElementByIds('domainEnabled', 'domainToggle');
+
+    if (globalCheckbox) this.setToggleState(globalCheckbox, this.settings.globalEnabled);
+
+    if (domainCheckbox) {
+      const domainSetting = this.settings.domains[this.currentDomain]?.enabled;
+      if (domainSetting !== undefined) {
+        this.setToggleState(domainCheckbox, domainSetting);
+        if (domainCheckbox.tagName === 'INPUT') domainCheckbox.indeterminate = false;
+      } else {
+        this.setToggleState(domainCheckbox, this.settings.globalEnabled);
+        if (domainCheckbox.tagName === 'INPUT') domainCheckbox.indeterminate = true;
+      }
     }
   }
 
   updateSeriesUI() {
-    const seriesNameElement = document.getElementById('seriesName');
-    const seriesEpisodeElement = document.getElementById('seriesEpisode');
-    const seriesSection = document.querySelector('.series-section');
-    
+    const seriesNameElement = this.elementForSeriesName();
+    const seriesEpisodeElement = this.elementForSeriesEpisode();
+    const seriesSection = this.elementForSeriesSection();
+
     if (this.currentSeries) {
-      seriesNameElement.textContent = this.currentSeries.title;
-      seriesEpisodeElement.textContent = this.currentSeries.episode || 'Unbekannt';
-      seriesSection.style.display = 'block';
-      
+      if (seriesNameElement) seriesNameElement.textContent = this.currentSeries.title;
+      if (seriesEpisodeElement) seriesEpisodeElement.textContent = this.currentSeries.episode || 'Unbekannt';
+      if (seriesSection) seriesSection.style.display = 'block';
+
       this.updateSeriesSettings();
     } else {
-      seriesSection.style.display = 'none';
+      if (seriesSection) seriesSection.style.display = 'none';
     }
   }
 
@@ -374,9 +484,13 @@ class PopupManager {
     };
 
     ['skipIntro', 'skipRecap', 'skipCredits', 'skipAds', 'autoNext'].forEach(setting => {
-      const checkbox = document.getElementById(setting);
+      const checkbox = this.elementForSetting(setting);
       if (checkbox) {
-        checkbox.checked = seriesSettings[setting];
+        if (checkbox.tagName === 'INPUT' && checkbox.type === 'checkbox') {
+          checkbox.checked = !!seriesSettings[setting];
+        } else {
+          this.setToggleState(checkbox, !!seriesSettings[setting]);
+        }
       }
     });
   }
@@ -408,13 +522,13 @@ class PopupManager {
   }
 
   showStatus(message, type = 'info') {
-    const statusElement = document.getElementById('status');
+    const statusElement = this.elementForStatus();
     if (!statusElement) return;
-    
+
     statusElement.textContent = message;
     statusElement.className = `status ${type}`;
     statusElement.style.display = 'block';
-    
+
     setTimeout(() => {
       statusElement.style.display = 'none';
     }, 3000);

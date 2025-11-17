@@ -450,7 +450,7 @@
       height: auto !important;
     }
     
-    .compact-mode body {
+    body.compact-mode {
       min-height: auto !important;
       height: fit-content !important;
       max-height: none !important;
@@ -720,6 +720,38 @@
         </div>
         
         <div class="status hidden" id="statusMessage"></div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Unsupported site view (old-style, hidden by default) -->
+  <div class="container unsupported-content" style="display:none;">
+    <div class="content-wrapper">
+      <div class="main-content">
+        <div class="header">
+          <div class="logo">
+            <svg viewBox="0 0 24 24">
+              <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/>
+            </svg>
+          </div>
+          <div class="header-content">
+            <h1 data-i18n="unsupportedSiteTitle">Seite nicht unterstützt</h1>
+            <div class="subtitle" data-i18n="unsupportedSiteDesc">Diese Website wird derzeit nicht von Smart Skip unterstützt.</div>
+          </div>
+        </div>
+
+        <div class="series-section" style="margin-top:16px;">
+          <div class="series-title" data-i18n="unsupportedSite">Seite nicht unterstützt</div>
+          <div class="series-info" data-i18n="unsupportedSiteHint">Diese Website wird bisher nicht von Smart Skip unterstützt. Wenn du möchtest, kannst du dem Projekt die URL melden.</div>
+          <div class="series-info" style="margin-top:8px;" data-i18n="supportedPlatforms">Unterstützte Plattformen: Netflix, Disney+, Amazon Prime Video, Crunchyroll, Apple TV+, Joyn, RTL+, ProSiebenSat.1 Mediathek, ARD, ZDF, Mediathek, u.v.m.</div>
+        </div>
+      </div>
+      <div class="footer-content">
+        <div class="buttons">
+          <button class="btn btn-primary" id="reloadBtnUnsupported">
+            <span data-i18n="reloadButton">Neuladen</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>
