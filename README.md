@@ -8,7 +8,7 @@
 <br>
 
 [![Firefox Extension](https://img.shields.io/badge/Firefox-Extension-FF7139?style=for-the-badge&logo=firefox&logoColor=white)](https://addons.mozilla.org/firefox/)
-[![Version](https://img.shields.io/badge/version-1.1.7-4285F4?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Nick190401/Smart-Skip)
+[![Version](https://img.shields.io/badge/version-1.1.9-4285F4?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Nick190401/Smart-Skip)
 [![License](https://img.shields.io/badge/license-Custom-28A745?style=for-the-badge&logo=book&logoColor=white)](LICENSE)
 [![Manifest V3](https://img.shields.io/badge/manifest-v3-9C27B0?style=for-the-badge&logo=google-chrome&logoColor=white)](manifest.json)
 
@@ -821,21 +821,20 @@ This project is licensed under a custom License - see the [LICENSE](LICENSE) fil
 <tr>
 <td width="20%">
 
-#### 🏷️ **v1.1.6**
+#### 🏷️ **v1.1.8**
 > *Current Version*
 
-🗓️ **Released:** September 2025  
-🎯 **Focus:** Code Quality & Performance
+🗓️ **Released:** November 2025  
+🎯 **Focus:** Prime Video Compatibility Fix
 
 </td>
 <td width="80%">
 
 **✨ What's New:**
-- 🧠 **Enhanced Series Detection** → Improved accuracy across all platforms
-- ⚡ **Performance Optimizations** → Reduced memory usage and faster button detection  
-- 🧹 **Code Quality** → Cleaned up codebase for better maintainability
-- 🐛 **Bug Fixes** → Resolved edge cases in series detection and button clicking
-- 🔒 **Security** → Enhanced permission handling and data validation
+- 🟦 **Prime Video Fix** → Adjusted `getPlayerContainer()` fallback to ensure
+  “Vorspann überspringen” / “Skip Intro” button is detected and clicked reliably  
+- 🔍 Improved detection accuracy for Prime Video overlays  
+- 🛠 Minor robustness tweaks in button scanning logic  
 
 </td>
 </tr>

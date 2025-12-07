@@ -2210,6 +2210,15 @@ class VideoPlayerSkipper {
   /** Try to scope actions to the most likely player container. */
   getPlayerContainer() {
     try {
+      
+      //Domain-specific fallback for Prime
+      if (
+      indow.location.hostname.includes('primevideo.') ||
+      (window.location.hostname.includes('amazon.') && window.location.pathname.includes('/gp/video'))
+      ) {
+      return document.body;
+      }
+      
       // Prefer the nearest ancestor of a <video>
       const video = document.querySelector('video');
       if (video) {
@@ -2229,6 +2238,7 @@ class VideoPlayerSkipper {
         const el = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
         if (el) return el;
       }
+
       // Last resort: restrict to main area if available
       return document.querySelector('#player, .player, .video-player') || document.body;
     } catch (e) {
