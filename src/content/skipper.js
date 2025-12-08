@@ -2190,6 +2190,18 @@ class VideoPlayerSkipper {
   scanForButtons() {
     if (!this.isEnabled) return;
     
+    // Only scan for buttons on video/watch pages, not on browse/list pages
+    const url = window.location.href;
+    const isOnWatchPage = url.includes('/watch') || 
+                         url.includes('/video') || 
+                         url.includes('/player') ||
+                         url.includes('static.crunchyroll.com/vilos'); // Player iframe
+    
+    // Skip button scanning on non-watch pages (browse, search, list pages, etc.)
+    if (!isOnWatchPage && !document.querySelector('video')) {
+      return;
+    }
+    
     const now = Date.now();
     if (now - this.lastClickTime < this.clickCooldown) {
       return;
