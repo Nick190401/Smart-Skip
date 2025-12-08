@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Smart Skip",
-  "version": "1.2.0",
+  "version": "1.2.2",
   "description": "Auto-skip intros, recaps, credits, ads, and next episode buttons on streaming platforms. Supports 12 languages.",
   
   "browser_specific_settings": {
@@ -128,6 +128,6 @@
   },
   
   "background": {
-    "scripts": ["src/background/background.js"]
+    "service_worker": "src/background/background.js"
   }
 }
