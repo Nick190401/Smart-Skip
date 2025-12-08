@@ -781,29 +781,56 @@ class VideoPlayerSkipper {
   }
   /** Initialize: detect language, load settings, setup observers, start scanning */
   async init() {
-    // Skip initialization in iframe contexts - only run in main window
     const url = window.location.href;
-    const isIframeContext = url.includes('player.html') || 
-                           url.includes('sw_iframe') ||
-                           url.includes('service_worker') ||
-                           url.includes('metrics.crunchyroll.com') ||
-                           url.includes('static.crunchyroll.com') ||
-                           window.self !== window.top;
     
-    if (isIframeContext) {
-      console.log('[Skipper] 🚫 SKIPPING INITIALIZATION - running in iframe/worker context:', url);
+    // Block only service worker and metrics iframes (not the player iframe!)
+    const isServiceWorkerOrMetrics = url.includes('sw_iframe') ||
+                                     url.includes('service_worker') ||
+                                     url.includes('metrics.crunchyroll.com');
+    
+    if (isServiceWorkerOrMetrics) {
       return;
     }
     
-    console.log('[Skipper] ✅ INITIALIZING - main page context:', url);
+    // Detect if we're in the Crunchyroll player iframe
+    const isCrunchyrollPlayer = url.includes('static.crunchyroll.com') && url.includes('player.html');
+    
+    if (isCrunchyrollPlayer) {
+      // In player iframe: only scan for buttons, no series detection
+      this.detectedLanguage = this.detectPageLanguage();
+      this.buttonPatterns = this.generateButtonPatterns();
+      await this.loadSettings();
+      
+      // Mark this instance as player iframe (to prevent series detection in start())
+      this.isPlayerIframe = true;
+      
+      // Start button scanning only
+      this.start();
+      
+      if (this.isExtensionContextValid()) {
+        try {
+          chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+            this.handleMessage(request, sender, sendResponse);
+            return true;
+          });
+        } catch (e) {}
+      }
+      return;
+    }
+    
+    // Main window initialization (full features)
+    const isMainWindow = window.self === window.top;
+    if (!isMainWindow) {
+      return;
+    }
     
     this.detectedLanguage = this.detectPageLanguage();
     this.buttonPatterns = this.generateButtonPatterns();
     
     await this.loadSettings();
     
-  this.startSeriesDetection();
-  this.ensureHUD();
+    this.startSeriesDetection();
+    this.ensureHUD();
     
     // Only set up Chrome extension listeners if context is valid
     if (this.isExtensionContextValid()) {
@@ -1315,12 +1342,12 @@ class VideoPlayerSkipper {
    * Uses DOM state hashing to skip redundant runs
    */
   detectCurrentSeries() {
-    const now = Date.now();
-    if (this.verboseLogging) {
-      try {
-        console.log('[Skipper] detectCurrentSeries called', { url: window.location.href, lastUrl: this.lastUrl, currentSeries: this.currentSeries });
-      } catch (e) {}
+    // Don't run series detection in player iframe
+    if (this.isPlayerIframe) {
+      return;
     }
+    
+    const now = Date.now();
     const currentUrl = window.location.href;
     
     // More nuanced DOM state - don't include document.title as it changes too frequently
@@ -1343,11 +1370,6 @@ class VideoPlayerSkipper {
     this.lastDomStateHash = domStateHash;
     
     const newSeries = this.extractSeriesInfo();
-    if (this.verboseLogging) {
-      try {
-        console.log('[Skipper] extractSeriesInfo =>', newSeries);
-      } catch (e) {}
-    }
     
     const isOnTitlePage = window.location.href.includes('/title/') && 
                          !window.location.href.includes('/watch/');
@@ -1386,9 +1408,6 @@ class VideoPlayerSkipper {
       if (crunchyrollWatchPage && this.currentSeries) {
         // We're on Crunchyroll watch page/iframe but couldn't extract series info
         // This is very common as DOM loads slowly or we're in an iframe - ALWAYS keep current series
-        if (this.verboseLogging) {
-          console.log('[Skipper] Crunchyroll watch page/iframe but no series extracted - keeping current:', this.currentSeries);
-        }
         return;
       }
       
@@ -1398,10 +1417,6 @@ class VideoPlayerSkipper {
         seriesChanged = true;
       } else if (isOnVideoPage) {
         // On video page but couldn't extract info - keep current series for now
-        // But log this for debugging
-        if (this.verboseLogging) {
-          console.log('[Skipper] Video page but no series extracted - keeping current:', this.currentSeries);
-        }
         return; 
       } else {
         return;
@@ -1419,13 +1434,6 @@ class VideoPlayerSkipper {
         const isSuspicious = suspiciousTitles.some(term => newTitleLower === term || newTitleLower.includes(term));
         
         if (isSuspicious) {
-          if (this.verboseLogging) {
-            console.log('[Skipper] Ignoring suspicious title change:', {
-              from: this.currentSeries.title,
-              to: newSeries.title,
-              reason: 'appears to be generic/player element'
-            });
-          }
           // Keep current series, just update episode if it changed
           if (episodeChanged && newSeries.episode && newSeries.episode !== 'unknown') {
             this.currentSeries.episode = newSeries.episode;
@@ -1437,15 +1445,6 @@ class VideoPlayerSkipper {
       
       if (titleChanged || episodeChanged || sourceChanged) {
         seriesChanged = true;
-        if (this.verboseLogging) {
-          console.log('[Skipper] Series change detected:', {
-            titleChanged,
-            episodeChanged,
-            sourceChanged,
-            old: this.currentSeries,
-            new: newSeries
-          });
-        }
       }
     }
     
@@ -1470,9 +1469,6 @@ class VideoPlayerSkipper {
       );
       
       if (!newSeries && onCrunchyrollWatch && this.currentSeries) {
-        if (this.verboseLogging) {
-          console.log('[Skipper] Crunchyroll: refusing to clear series on watch page');
-        }
         return; // Don't clear the series
       }
       
@@ -1511,30 +1507,19 @@ class VideoPlayerSkipper {
     const domain = this.domain;
 
     try {
-      if (this.verboseLogging) {
-        console.log('[Skipper] extractSeriesInfo for domain', domain);
-      }
-
       if (domain.includes('netflix.com')) {
-        if (this.verboseLogging) console.log('[Skipper] using Netflix extractor');
         return this.extractNetflixSeries();
       } else if (domain.includes('disneyplus.com') || domain.includes('disney.com')) {
-        if (this.verboseLogging) console.log('[Skipper] using Disney+ extractor');
         return this.extractDisneyPlusSeries();
       } else if (domain.includes('primevideo.com') || domain.includes('amazon.')) {
-        if (this.verboseLogging) console.log('[Skipper] using Prime Video extractor');
         return this.extractPrimeVideoSeries();
       } else if (domain.includes('youtube.com')) {
-        if (this.verboseLogging) console.log('[Skipper] using YouTube extractor');
         return this.extractYouTubeSeries();
       } else if (domain.includes('crunchyroll.com')) {
-        if (this.verboseLogging) console.log('[Skipper] using Crunchyroll extractor');
         return this.extractCrunchyrollSeries();
       } else if (domain.includes('apple.com')) {
-        if (this.verboseLogging) console.log('[Skipper] using Apple TV extractor');
         return this.extractAppleTVSeries();
       } else {
-        if (this.verboseLogging) console.log('[Skipper] using Generic extractor');
         return this.extractGenericSeries();
       }
     } catch (error) {
@@ -1890,8 +1875,6 @@ class VideoPlayerSkipper {
   /** Extract series/episode info from Crunchyroll DOM */
   extractCrunchyrollSeries() {
     try {
-      console.log('[Skipper] extractCrunchyrollSeries - attempting selectors on URL:', window.location.href);
-
       // CRITICAL: Don't run extraction on iframe contexts (player.html, service worker, etc.)
       // These will never have the series metadata and would incorrectly return null
       const url = window.location.href;
@@ -1899,7 +1882,6 @@ class VideoPlayerSkipper {
           url.includes('sw_iframe.html') || 
           url.includes('service_worker') ||
           url.includes('metrics.crunchyroll.com')) {
-        console.log('[Skipper] Skipping Crunchyroll extraction - running in iframe/worker context');
         return null;
       }
 
@@ -1938,11 +1920,9 @@ class VideoPlayerSkipper {
       ];
 
       let title = null;
-      console.log('[Skipper] Trying', titleSelectors.length, 'title selectors...');
       
       for (const sel of titleSelectors) {
         const el = document.querySelector(sel);
-        console.log('[Skipper] Selector:', sel, '=> Element:', el ? 'FOUND' : 'null', el?.textContent?.substring(0, 50));
         
         if (el && el.textContent && el.textContent.trim().length > 1) {
           const candidate = el.textContent.trim();
@@ -1951,21 +1931,15 @@ class VideoPlayerSkipper {
           // Skip if it's a generic/invalid title
           if (!invalidTitles.some(inv => candidateLower === inv || candidateLower.includes(inv))) {
             title = candidate;
-            console.log('[Skipper] ✓ FOUND TITLE from', sel, ':', title);
             break;
-          } else {
-            console.log('[Skipper] ✗ Skipping generic title from', sel, ':', candidate);
           }
         }
       }
 
       // If we didn't find a valid title, return null immediately
       if (!title) {
-        console.log('[Skipper] ✗ NO VALID TITLE FOUND - returning null');
         return null;
       }
-      
-      console.log('[Skipper] Using title:', title);
 
       // Episode selectors - try multiple variants
       const episodeSelectors = [
@@ -1980,11 +1954,8 @@ class VideoPlayerSkipper {
       let episode = null;
       let episodeTitle = null;
       
-      console.log('[Skipper] Trying', episodeSelectors.length, 'episode selectors...');
-      
       for (const sel of episodeSelectors) {
         const el = document.querySelector(sel);
-        console.log('[Skipper] Episode selector:', sel, '=> Element:', el ? 'FOUND' : 'null', el?.textContent?.substring(0, 50));
         
         if (el && el.textContent && el.textContent.trim().length > 0) {
           let text = el.textContent.trim();
@@ -1993,8 +1964,6 @@ class VideoPlayerSkipper {
           if (title && text.toLowerCase().startsWith(title.toLowerCase())) {
             text = text.substring(title.length).replace(/^[\s\-–—|:]+/, '').trim();
           }
-          
-          console.log('[Skipper] Episode candidate text:', text);
           
           // Try to extract episode number and title
           const episodePattern = /^(?:E|Episode|Ep\.?|Folge)\s*(\d+)(?:\s*[-–—|:]\s*(.+))?$/i;
@@ -2005,7 +1974,6 @@ class VideoPlayerSkipper {
           if (match) {
             episode = `E${match[1]}`;
             episodeTitle = match[2]?.trim() || null;
-            console.log('[Skipper] ✓ Parsed episode (pattern 1):', episode, episodeTitle);
             break;
           }
           
@@ -2013,7 +1981,6 @@ class VideoPlayerSkipper {
           if (match) {
             episode = `S${match[1]}E${match[2]}`;
             episodeTitle = match[3]?.trim() || null;
-            console.log('[Skipper] ✓ Parsed episode (season pattern):', episode, episodeTitle);
             break;
           }
           
@@ -2021,14 +1988,12 @@ class VideoPlayerSkipper {
           if (match && text.length < 150) {
             episode = `E${match[1]}`;
             episodeTitle = match[2]?.trim() || null;
-            console.log('[Skipper] ✓ Parsed episode (simple number):', episode, episodeTitle);
             break;
           }
           
           // If none of the patterns match but text looks reasonable, use it as-is
           if (text.length < 150 && text.length > 0) {
             episode = text;
-            console.log('[Skipper] ✓ Using full text as episode:', episode);
             break;
           }
         }
@@ -2039,28 +2004,19 @@ class VideoPlayerSkipper {
         episode = `${episode} - ${episodeTitle}`;
       }
 
-      console.log('[Skipper] Final episode value:', episode || 'unknown');
-
       // Clean title if it contains episode info
       if (title) {
-        const originalTitle = title;
         title = title.replace(/\s*[-–—|]\s*(?:Episode|Ep|Folge|E)\.?\s*\d+.*$/i, '').trim();
         title = title.replace(/\s*\|\s*Crunchyroll.*$/i, '').trim();
         title = title.replace(/\s*[-–—|]\s*S\d+E\d+.*$/i, '').trim();
-        if (originalTitle !== title) {
-          console.log('[Skipper] Cleaned title from:', originalTitle, 'to:', title);
-        }
       }
 
       if (title) {
-        const result = { title, episode: episode || 'unknown', source: 'crunchyroll' };
-        console.log('[Skipper] ✓ CRUNCHYROLL SERIES DETECTED:', result);
-        return result;
+        return { title, episode: episode || 'unknown', source: 'crunchyroll' };
       }
     } catch (error) {
-      console.error('[Skipper] ✗ extractCrunchyrollSeries ERROR:', error);
+      console.error('[Skipper] extractCrunchyrollSeries ERROR:', error);
     }
-    console.log('[Skipper] ✗ extractCrunchyrollSeries returning null');
     return null;
   }
 
@@ -2118,11 +2074,11 @@ class VideoPlayerSkipper {
   handleMessage(request, sender, sendResponse) {
     switch (request.action) {
       case 'detectSeries':
-        this.lastSeriesDetection = 0;
-        this.lastDetectionUrl = null;
-        this.lastDomStateHash = null;
-        
-        this.detectCurrentSeries();
+        // Player iframe should not respond to series detection requests
+        // Only the main window has series information
+        if (this.isPlayerIframe) {
+          return; // Don't respond
+        }
         
         sendResponse({ series: this.currentSeries });
         break;
@@ -2186,7 +2142,8 @@ class VideoPlayerSkipper {
     
     this.scanForButtons();
 
-    if (typeof this.detectCurrentSeries === 'function') {
+    // Don't run series detection in player iframe
+    if (!this.isPlayerIframe && typeof this.detectCurrentSeries === 'function') {
       this.detectCurrentSeries();
     }
     // Ensure HUD reflects current visibility when starting observers
@@ -2239,20 +2196,33 @@ class VideoPlayerSkipper {
     }
     
     // Limit scanning to the video/player area to avoid touching large sidebars (e.g., YouTube recommendations)
-    const container = this.getPlayerContainer();
+    // Special case for Crunchyroll player iframe: use document instead of container
+    let container = this.getPlayerContainer();
+    const isCrunchyrollPlayer = window.location.hostname.includes('static.crunchyroll.com') && 
+                                window.location.pathname.includes('player.html');
+    if (isCrunchyrollPlayer) {
+      container = document;
+    }
     if (!container) return;
 
-    const seriesSettings = this.getCurrentSeriesSettings();
+    // For Crunchyroll player iframe, use global settings since we don't detect series there
+    const seriesSettings = isCrunchyrollPlayer ? this.settings : this.getCurrentSeriesSettings();
     
     let clicked = false;
     for (const selector of this.buttonPatterns.selectors) {
       const buttons = container.querySelectorAll(selector);
       for (const button of buttons) {
         const buttonType = this.getButtonType(button, selector);
-        if ((['intro','recap','credits','ads'].includes(buttonType))
+        
+        // For Crunchyroll player iframe, always skip (use defaults)
+        const shouldClick = isCrunchyrollPlayer 
+          ? (['intro','recap','credits','ads'].includes(buttonType)) // Always skip in player iframe
+          : (['intro','recap','credits','ads'].includes(buttonType))
             && buttonType !== 'watch-abspann' && buttonType !== 'watch'
-            && this.shouldSkipButtonType(buttonType, seriesSettings)
-            && this.isButtonClickable(button)) {
+            && this.shouldSkipButtonType(buttonType, seriesSettings);
+            
+        if (shouldClick && this.isButtonClickable(button)) {
+          console.log(`[Skipper] ✅ Clicking ${buttonType} button`);
           this.clickButton(button, `selector: ${selector} (${buttonType})`);
           clicked = true;
           break;
@@ -2466,11 +2436,22 @@ class VideoPlayerSkipper {
     
     if (ariaHasSkip) {
       if (ariaLabel.includes('intro') || ariaLabel.includes('opening') || ariaLabel.includes('vorspann') ||
-          ariaLabel.includes('オープニング') || ariaLabel.includes('오프닝')) return 'intro';
+          ariaLabel.includes('abertura') || ariaLabel.includes('générique') || ariaLabel.includes('apertura') ||
+          ariaLabel.includes('オープニング') || ariaLabel.includes('오프닝') || ariaLabel.includes('片头')) return 'intro';
       if (ariaLabel.includes('recap') || ariaLabel.includes('previously') || ariaLabel.includes('zusammenfassung')) return 'recap';
       if (creditsPatterns.some(p => ariaLabel.includes(p))) return 'credits';
       if (ariaLabel.includes('ad') || ariaLabel.includes('anzeige') || ariaLabel.includes('werbung')) return 'ads';
       return 'unknown-skip';
+    }
+    
+    // Also check aria-label for opening/intro without "skip" text
+    if (ariaLabel) {
+      if (ariaLabel.includes('intro') || ariaLabel.includes('opening') || ariaLabel.includes('vorspann') ||
+          ariaLabel.includes('abertura') || ariaLabel.includes('générique') || ariaLabel.includes('apertura') ||
+          ariaLabel.includes('オープニング') || ariaLabel.includes('오프닝') || ariaLabel.includes('片头')) return 'intro';
+      if (ariaLabel.includes('recap') || ariaLabel.includes('previously') || ariaLabel.includes('zusammenfassung') ||
+          ariaLabel.includes('rückblick') || ariaLabel.includes('zuvor')) return 'recap';
+      if (creditsPatterns.some(p => ariaLabel.includes(p))) return 'credits';
     }
     
     return 'unknown';
@@ -2478,44 +2459,46 @@ class VideoPlayerSkipper {
   
   /** Text/aria-only classifier as a secondary pass - Multi-language support */
   getButtonTypeFromText(button) {
-    const text = (button.textContent || button.getAttribute('aria-label') || '').toLowerCase();
+    const text = (button.textContent || '').toLowerCase();
+    const ariaLabel = (button.getAttribute('aria-label') || '').toLowerCase();
+    const combinedText = text + ' ' + ariaLabel;
 
     // Multi-language intro patterns
     // English, German, Spanish, French, Portuguese, Italian, Dutch, Polish, Russian, Japanese, Korean, Chinese
-    if (/intro|opening|vorspann|abertura|générique|apertura|オープニング|오프닝|片头/.test(text)) {
+    if (/intro|opening|vorspann|abertura|générique|apertura|オープニング|오프닝|片头/.test(combinedText)) {
       return 'intro';
     }
     
     // Multi-language recap patterns
-    if (/recap|previously|zuvor|rückblick|zusammenfassung|resumen|résumé|resumo|riepilogo|samenvatting|podsumowanie|要約|요약|回顾/.test(text)) {
+    if (/recap|previously|zuvor|rückblick|zusammenfassung|resumen|résumé|resumo|riepilogo|samenvatting|podsumowanie|要約|요약|回顾/.test(combinedText)) {
       return 'recap';
     }
     
     // Multi-language credits/ending patterns
-    if (/credits|abspann|ending|outro|créditos|crédits|crediti|aftiteling|napisy końcowe|титры|クレジット|크레딧|片尾/.test(text)) {
+    if (/credits|abspann|ending|outro|créditos|crédits|crediti|aftiteling|napisy końcowe|титры|クレジット|크레딧|片尾/.test(combinedText)) {
       // Make sure it's not a "Watch Credits" button
-      if (/watch|ansehen|schaue|ver|voir|guarda|assistir|bekijken|oglądać|смотреть|見る|시청|观看/.test(text)) {
+      if (/watch|ansehen|schaue|ver|voir|guarda|assistir|bekijken|oglądać|смотреть|見る|시청|观看/.test(combinedText)) {
         return 'watch-credits';
       }
       return 'credits';
     }
     
     // Multi-language ad patterns
-    if (/ad|anzeige|werbung|commercial|anuncio|publicité|pubblicit|anúncio|advertentie|reklama|реклама|広告|광고|广告/.test(text)) {
+    if (/ad|anzeige|werbung|commercial|anuncio|publicité|pubblicit|anúncio|advertentie|reklama|реклама|広告|광고|广告/.test(combinedText)) {
       return 'ads';
     }
     
     // Multi-language next episode patterns
-    if (/next|nächste|continue|weiter|fortsetzen|siguiente|próximo|suivant|prossimo|próximo|volgende|następny|следующий|次|다음|下一个/.test(text)) {
+    if (/next|nächste|continue|weiter|fortsetzen|siguiente|próximo|suivant|prossimo|próximo|volgende|następny|следующий|次|다음|下一个/.test(combinedText)) {
       return 'next';
     }
     
     // Multi-language skip patterns
-    if (/skip|überspringen|vorspulen|pular|saltar|passer|salta|overslaan|pomiń|пропустить|スキップ|건너뛰기|跳过/.test(text)) {
+    if (/skip|überspringen|vorspulen|pular|saltar|passer|salta|overslaan|pomiń|пропустить|スキップ|건너뛰기|跳过/.test(combinedText)) {
       // Try to infer type from context
-      if (/intro|opening|vorspann|abertura|générique|オープニング/.test(text)) return 'intro';
-      if (/credits|abspann|ending|créditos|クレジット|片尾/.test(text)) return 'credits';
-      if (/recap|previously|zusammenfassung|resumen|résumé|要約/.test(text)) return 'recap';
+      if (/intro|opening|vorspann|abertura|générique|オープニング/.test(combinedText)) return 'intro';
+      if (/credits|abspann|ending|créditos|クレジット|片尾/.test(combinedText)) return 'credits';
+      if (/recap|previously|zusammenfassung|resumen|résumé|要約/.test(combinedText)) return 'recap';
       // Default to generic skip (treat as ads)
       return 'unknown-skip';
     }
@@ -2590,6 +2573,18 @@ class VideoPlayerSkipper {
         'button[class*="skip-recap"], [class*="skip-recap"]',
         'button[aria-label*="Recap"], button[aria-label*="Previously"], [aria-label*="Recap"], [aria-label*="Previously"]',
         '[data-testid*="skip"]',
+        '[data-testid="skipIntro"]',
+        // Crunchyroll: Direct selector for skip intro button
+        '[data-testid="skipIntroText"]',
+        '[aria-label*="Opening"][role="button"]',
+        '[aria-label*="opening"][role="button"]',
+        '[aria-label*="Skip"][role="button"]',
+        '[aria-label*="skip"][role="button"]',
+        '[aria-label*="überspringen"][role="button"]',
+        '[aria-label*="Überspringen"][role="button"]',
+        'button:has([data-testid="skipIntroText"])',
+        'button:has([data-testid*="skip"])',
+        '[role="button"]:has([data-testid="skipIntroText"])',
         '[data-qa*="skip"]',
         // Amazon Prime Video specific selectors
         '.atvwebplayersdk-skipelement-button',
@@ -2766,7 +2761,6 @@ if (document.readyState === 'loading') {
     try {
       if (!window.videoPlayerSkipper || !(window.videoPlayerSkipper instanceof VideoPlayerSkipper)) {
         window.videoPlayerSkipper = new VideoPlayerSkipper();
-        console.log('[Skipper] Initialized on DOMContentLoaded');
       }
     } catch (error) {
       console.error('[Skipper] Failed to initialize:', error);
@@ -2776,7 +2770,6 @@ if (document.readyState === 'loading') {
   try {
     if (!window.videoPlayerSkipper || !(window.videoPlayerSkipper instanceof VideoPlayerSkipper)) {
       window.videoPlayerSkipper = new VideoPlayerSkipper();
-      console.log('[Skipper] Initialized immediately');
     }
   } catch (error) {
     console.error('[Skipper] Failed to initialize:', error);

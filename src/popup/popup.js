@@ -394,7 +394,9 @@ class PopupManager {
   async detectCurrentSeries() {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab) return;
+      if (!tab) {
+        return;
+      }
 
       const response = await this.sendMessageToActiveTabSafe({ action: 'detectSeries' });
       
