@@ -784,6 +784,22 @@ class VideoPlayerSkipper {
   }
   /** Initialization pipeline: detect language, load settings, wire observers, start. */
   async init() {
+    // CRITICAL: Don't initialize in iframe contexts - only in main page
+    const url = window.location.href;
+    const isIframeContext = url.includes('player.html') || 
+                           url.includes('sw_iframe') ||
+                           url.includes('service_worker') ||
+                           url.includes('metrics.crunchyroll.com') ||
+                           url.includes('static.crunchyroll.com') ||
+                           window.self !== window.top;
+    
+    if (isIframeContext) {
+      console.log('[Skipper] 🚫 SKIPPING INITIALIZATION - running in iframe/worker context:', url);
+      return; // Don't initialize anything in iframes
+    }
+    
+    console.log('[Skipper] ✅ INITIALIZING - main page context:', url);
+    
     // Initialization proceeds regardless of built-in supported platforms; actual enablement is controlled by settings
     
     this.detectedLanguage = this.detectPageLanguage();
@@ -794,10 +810,25 @@ class VideoPlayerSkipper {
   this.startSeriesDetection();
   this.ensureHUD();
     
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-      this.handleMessage(request, sender, sendResponse);
-      return true;
-    });
+    // Only set up Chrome extension listeners if context is valid
+    if (this.isExtensionContextValid()) {
+      try {
+        chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+          this.handleMessage(request, sender, sendResponse);
+          return true;
+        });
+      } catch (e) {
+        console.warn('[Skipper] Failed to add runtime message listener:', e);
+      }
+      
+      try {
+        chrome.storage.onChanged.addListener((changes) => {
+          this.handleStorageChange(changes);
+        });
+      } catch (e) {
+        console.warn('[Skipper] Failed to add storage change listener:', e);
+      }
+    }
     
     window.__autoSkipper = {
       start: () => this.start(),
@@ -813,10 +844,6 @@ class VideoPlayerSkipper {
     if (this.isEnabled) {
       this.start();
     }
-    
-    chrome.storage.onChanged.addListener((changes) => {
-      this.handleStorageChange(changes);
-    });
   }
   
   /** Load settings from storage with multi-layer fallbacks and set enable flags. */
@@ -1346,6 +1373,28 @@ class VideoPlayerSkipper {
       const isOnTitlePage = window.location.href.includes('/title/') && 
                            !window.location.href.includes('/watch/');
       
+      // For Crunchyroll: be VERY conservative - keep current series if we're on any watch/video page OR in iframe
+      const isCrunchyroll = this.domain.includes('crunchyroll');
+      const isIframeContext = window.location.href.includes('player.html') || 
+                             window.location.href.includes('sw_iframe') ||
+                             window.location.href.includes('service_worker') ||
+                             window.location.href.includes('metrics.crunchyroll.com');
+      const crunchyrollWatchPage = isCrunchyroll && (
+        window.location.href.includes('/watch') || 
+        window.location.pathname.includes('/watch') ||
+        document.querySelector('video') !== null ||
+        isIframeContext
+      );
+      
+      if (crunchyrollWatchPage && this.currentSeries) {
+        // We're on Crunchyroll watch page/iframe but couldn't extract series info
+        // This is very common as DOM loads slowly or we're in an iframe - ALWAYS keep current series
+        if (this.verboseLogging) {
+          console.log('[Skipper] Crunchyroll watch page/iframe but no series extracted - keeping current:', this.currentSeries);
+        }
+        return;
+      }
+      
       if (!isOnVideoPage && !isOnTitlePage) {
         seriesChanged = true;
       } else if (isOnTitlePage && this.currentSeries) {
@@ -1364,6 +1413,30 @@ class VideoPlayerSkipper {
       const titleChanged = newSeries.title !== this.currentSeries.title;
       const episodeChanged = newSeries.episode !== this.currentSeries.episode;
       const sourceChanged = newSeries.source !== this.currentSeries.source;
+      
+      // If title changed, check if new title looks suspicious/generic
+      // If so, ignore it and keep current series
+      if (titleChanged) {
+        const suspiciousTitles = ['vilos', 'player', 'video', 'content', 'media', 'main', 'watch'];
+        const newTitleLower = newSeries.title.toLowerCase();
+        const isSuspicious = suspiciousTitles.some(term => newTitleLower === term || newTitleLower.includes(term));
+        
+        if (isSuspicious) {
+          if (this.verboseLogging) {
+            console.log('[Skipper] Ignoring suspicious title change:', {
+              from: this.currentSeries.title,
+              to: newSeries.title,
+              reason: 'appears to be generic/player element'
+            });
+          }
+          // Keep current series, just update episode if it changed
+          if (episodeChanged && newSeries.episode && newSeries.episode !== 'unknown') {
+            this.currentSeries.episode = newSeries.episode;
+            seriesChanged = true;
+          }
+          return;
+        }
+      }
       
       if (titleChanged || episodeChanged || sourceChanged) {
         seriesChanged = true;
@@ -1390,10 +1463,26 @@ class VideoPlayerSkipper {
         };
       }
       
-  this.currentSeries = newSeries;
+      // For Crunchyroll: NEVER clear the series if we're on a watch page
+      // DOM elements may not be ready yet, but we don't want to lose the series
+      const isCrunchyroll = this.domain.includes('crunchyroll');
+      const onCrunchyrollWatch = isCrunchyroll && (
+        window.location.href.includes('/watch') || 
+        window.location.pathname.includes('/watch') ||
+        document.querySelector('video') !== null
+      );
       
-  this.updateSeriesCheckInterval();
-  try { this.updateHUDState(); } catch (e) {}
+      if (!newSeries && onCrunchyrollWatch && this.currentSeries) {
+        if (this.verboseLogging) {
+          console.log('[Skipper] Crunchyroll: refusing to clear series on watch page');
+        }
+        return; // Don't clear the series
+      }
+      
+      this.currentSeries = newSeries;
+      
+      this.updateSeriesCheckInterval();
+      try { this.updateHUDState(); } catch (e) {}
       
       if (newSeries) {
         this.safeRuntimeSendMessage({
@@ -1770,6 +1859,17 @@ class VideoPlayerSkipper {
     let episode = document.querySelector('[data-automation-id="episode-info"]')?.textContent?.trim();
     if (!episode) episode = document.querySelector('.episode-info')?.textContent?.trim();
     if (!episode) episode = document.querySelector('[data-testid="episode-title"]')?.textContent?.trim();
+    if (!episode) episode = document.querySelector('.atvwebplayersdk-subtitle-text')?.textContent?.trim();
+    if (!episode) episode = document.querySelector('h2.atvwebplayersdk-subtitle-text')?.textContent?.trim();
+    
+    // Clean up episode: remove "Staffel X, F. Y" prefix
+    if (episode) {
+      episode = episode
+        .replace(/^Staffel\s+\d+,\s*F\.\s*\d+\s*/i, '')  // "Staffel 1, F. 9 " → ""
+        .replace(/^Season\s+\d+,\s*Ep\.\s*\d+\s*/i, '') // "Season 1, Ep. 9 " → ""
+        .replace(/^S\d+,?\s*E\d+\s*/i, '')              // "S1E9 " → ""
+        .trim();
+    }
     
     if (title) {
       return { title, episode: episode || 'unknown', source: 'prime' };
@@ -1793,7 +1893,18 @@ class VideoPlayerSkipper {
   /** Crunchyroll extractor. */
   extractCrunchyrollSeries() {
     try {
-      if (this.verboseLogging) console.log('[Skipper] extractCrunchyrollSeries - attempting selectors');
+      console.log('[Skipper] extractCrunchyrollSeries - attempting selectors on URL:', window.location.href);
+
+      // CRITICAL: Don't run extraction on iframe contexts (player.html, service worker, etc.)
+      // These will never have the series metadata and would incorrectly return null
+      const url = window.location.href;
+      if (url.includes('player.html') || 
+          url.includes('sw_iframe.html') || 
+          url.includes('service_worker') ||
+          url.includes('metrics.crunchyroll.com')) {
+        console.log('[Skipper] Skipping Crunchyroll extraction - running in iframe/worker context');
+        return null;
+      }
 
       // Generic/invalid titles that should be ignored
       const invalidTitles = [
@@ -1808,21 +1919,34 @@ class VideoPlayerSkipper {
         'stream',
         'anime',
         'watch on crunchyroll',
-        'start streaming'
+        'start streaming',
+        'vilos',
+        'main player',
+        'video player',
+        'content',
+        'unkown',
+        'media'
       ];
 
+      // Crunchyroll selectors - try multiple variants
       const titleSelectors = [
-        '[data-t="series-title"]',
-        '[data-qa="series-title"]',
-        '[data-testid="series-title"]',
-        '.series-title',
+        '[data-t="show-title-link"] h4',  // Primary selector
+        'a[data-t="show-title-link"] h4',
+        '[data-t="show-title-link"]',     // Without h4
+        'a[href*="/series/"] h4',         // Series link variant
+        '.show-title h4',
         '.show-title',
-        '.showTitle'
+        'h1[data-t="series-title"]',
+        '[class*="show-title"]'
       ];
 
       let title = null;
+      console.log('[Skipper] Trying', titleSelectors.length, 'title selectors...');
+      
       for (const sel of titleSelectors) {
         const el = document.querySelector(sel);
+        console.log('[Skipper] Selector:', sel, '=> Element:', el ? 'FOUND' : 'null', el?.textContent?.substring(0, 50));
+        
         if (el && el.textContent && el.textContent.trim().length > 1) {
           const candidate = el.textContent.trim();
           const candidateLower = candidate.toLowerCase();
@@ -1830,57 +1954,41 @@ class VideoPlayerSkipper {
           // Skip if it's a generic/invalid title
           if (!invalidTitles.some(inv => candidateLower === inv || candidateLower.includes(inv))) {
             title = candidate;
-            if (this.verboseLogging) console.log('[Skipper] crunch title from', sel, title);
+            console.log('[Skipper] ✓ FOUND TITLE from', sel, ':', title);
             break;
           } else {
-            if (this.verboseLogging) console.log('[Skipper] skipping generic title from', sel, candidate);
+            console.log('[Skipper] ✗ Skipping generic title from', sel, ':', candidate);
           }
         }
       }
 
-      // Fallback to meta tags (og:title or title) only if specific selectors didn't work
+      // If we didn't find a valid title, return null immediately
       if (!title) {
-        const metaTitle = document.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
-                          document.querySelector('meta[name="title"]')?.getAttribute('content');
-        if (metaTitle) {
-          // remove trailing site name
-          let candidate = String(metaTitle).replace(/\s*[-|]\s*Crunchyroll.*$/i, '').trim();
-          const candidateLower = candidate.toLowerCase();
-          
-          if (!invalidTitles.some(inv => candidateLower === inv || candidateLower.includes(inv))) {
-            title = candidate;
-            if (this.verboseLogging) console.log('[Skipper] crunch title from meta', title);
-          }
-        }
+        console.log('[Skipper] ✗ NO VALID TITLE FOUND - returning null');
+        return null;
       }
+      
+      console.log('[Skipper] Using title:', title);
 
-      // Last fallback: document.title (but be very strict)
-      if (!title && document.title) {
-        let candidate = document.title.replace(/\s*[-|]\s*Crunchyroll.*$/i, '').trim();
-        const candidateLower = candidate.toLowerCase();
-        
-        if (candidate.length > 3 && !invalidTitles.some(inv => candidateLower === inv || candidateLower.includes(inv))) {
-          title = candidate;
-          if (this.verboseLogging) console.log('[Skipper] crunch title from document.title', title);
-        }
-      }
-
-      // Episode selectors - try specific Crunchyroll attributes first
+      // Episode selectors - try multiple variants
       const episodeSelectors = [
-        '[data-t="episode-title"]',
-        '[data-qa="episode-title"]',
-        '[data-testid="episode-title"]',
+        'h1.heading--nKNOf.title',  // Primary
+        'h1.title',
+        'h1[class*="heading"]',
         '.episode-title',
-        '.erc-current-media-info',
-        'h1[class*="title"]',
-        '.video-title'
+        '[data-t="episode-title"]',
+        'h1[class*="title"]'
       ];
 
       let episode = null;
       let episodeTitle = null;
       
+      console.log('[Skipper] Trying', episodeSelectors.length, 'episode selectors...');
+      
       for (const sel of episodeSelectors) {
         const el = document.querySelector(sel);
+        console.log('[Skipper] Episode selector:', sel, '=> Element:', el ? 'FOUND' : 'null', el?.textContent?.substring(0, 50));
+        
         if (el && el.textContent && el.textContent.trim().length > 0) {
           let text = el.textContent.trim();
           
@@ -1889,10 +1997,9 @@ class VideoPlayerSkipper {
             text = text.substring(title.length).replace(/^[\s\-–—|:]+/, '').trim();
           }
           
-          if (this.verboseLogging) console.log('[Skipper] crunch episode candidate from', sel, ':', text);
+          console.log('[Skipper] Episode candidate text:', text);
           
           // Try to extract episode number and title
-          // Pattern: "E1 - Episode Title" or "Episode 1 - Title" or "S1E1 - Title"
           const episodePattern = /^(?:E|Episode|Ep\.?|Folge)\s*(\d+)(?:\s*[-–—|:]\s*(.+))?$/i;
           const seasonEpisodePattern = /^S(\d+)\s*E(\d+)(?:\s*[-–—|:]\s*(.+))?$/i;
           const simpleNumberPattern = /^(\d+)(?:\s*[-–—|:]\s*(.+))?$/;
@@ -1901,7 +2008,7 @@ class VideoPlayerSkipper {
           if (match) {
             episode = `E${match[1]}`;
             episodeTitle = match[2]?.trim() || null;
-            if (this.verboseLogging) console.log('[Skipper] crunch parsed episode:', episode, 'title:', episodeTitle);
+            console.log('[Skipper] ✓ Parsed episode (pattern 1):', episode, episodeTitle);
             break;
           }
           
@@ -1909,37 +2016,24 @@ class VideoPlayerSkipper {
           if (match) {
             episode = `S${match[1]}E${match[2]}`;
             episodeTitle = match[3]?.trim() || null;
-            if (this.verboseLogging) console.log('[Skipper] crunch parsed season/episode:', episode, 'title:', episodeTitle);
+            console.log('[Skipper] ✓ Parsed episode (season pattern):', episode, episodeTitle);
             break;
           }
           
           match = text.match(simpleNumberPattern);
-          if (match && text.length < 100) {
+          if (match && text.length < 150) {
             episode = `E${match[1]}`;
             episodeTitle = match[2]?.trim() || null;
-            if (this.verboseLogging) console.log('[Skipper] crunch parsed simple number:', episode, 'title:', episodeTitle);
+            console.log('[Skipper] ✓ Parsed episode (simple number):', episode, episodeTitle);
             break;
           }
           
           // If none of the patterns match but text looks reasonable, use it as-is
-          if (text.length < 100 && text.length > 0) {
+          if (text.length < 150 && text.length > 0) {
             episode = text;
-            if (this.verboseLogging) console.log('[Skipper] crunch using full text as episode:', episode);
+            console.log('[Skipper] ✓ Using full text as episode:', episode);
             break;
           }
-        }
-      }
-
-      // If no episode yet, try to parse document.title
-      if (!episode && document.title) {
-        const dt = document.title;
-        // Extract from patterns like "Series Name - E1 - Episode Title - Crunchyroll"
-        const titlePattern = /[-|]\s*(?:E|Episode|Ep\.?)\s*(\d+)(?:\s*[-|]\s*([^-|]+))?/i;
-        const match = dt.match(titlePattern);
-        if (match) {
-          episode = `E${match[1]}`;
-          episodeTitle = match[2]?.replace(/\s*[-|]\s*Crunchyroll.*$/i, '').trim() || null;
-          if (this.verboseLogging) console.log('[Skipper] crunch episode from document.title:', episode, 'title:', episodeTitle);
         }
       }
       
@@ -1948,19 +2042,28 @@ class VideoPlayerSkipper {
         episode = `${episode} - ${episodeTitle}`;
       }
 
+      console.log('[Skipper] Final episode value:', episode || 'unknown');
+
       // Clean title if it contains episode info
       if (title) {
+        const originalTitle = title;
         title = title.replace(/\s*[-–—|]\s*(?:Episode|Ep|Folge|E)\.?\s*\d+.*$/i, '').trim();
         title = title.replace(/\s*\|\s*Crunchyroll.*$/i, '').trim();
         title = title.replace(/\s*[-–—|]\s*S\d+E\d+.*$/i, '').trim();
+        if (originalTitle !== title) {
+          console.log('[Skipper] Cleaned title from:', originalTitle, 'to:', title);
+        }
       }
 
       if (title) {
-        return { title, episode: episode || 'unknown', source: 'crunchyroll' };
+        const result = { title, episode: episode || 'unknown', source: 'crunchyroll' };
+        console.log('[Skipper] ✓ CRUNCHYROLL SERIES DETECTED:', result);
+        return result;
       }
     } catch (error) {
-      if (this.verboseLogging) console.error('[Skipper] extractCrunchyrollSeries error', error);
+      console.error('[Skipper] ✗ extractCrunchyrollSeries ERROR:', error);
     }
+    console.log('[Skipper] ✗ extractCrunchyrollSeries returning null');
     return null;
   }
 
@@ -2213,7 +2316,7 @@ class VideoPlayerSkipper {
       
       //Domain-specific fallback for Prime
       if (
-      indow.location.hostname.includes('primevideo.') ||
+      window.location.hostname.includes('primevideo.') ||
       (window.location.hostname.includes('amazon.') && window.location.pathname.includes('/gp/video'))
       ) {
       return document.body;
@@ -2318,7 +2421,7 @@ class VideoPlayerSkipper {
     
     if (isSkipButton) {
       if (text.includes('intro') || text.includes('opening') || text.includes('vorspann')) return 'intro';
-      if (text.includes('recap') || text.includes('previously') || text.includes('zuvor')) return 'recap';
+      if (text.includes('recap') || text.includes('previously') || text.includes('zuvor') || text.includes('zusammenfassung') || text.includes('rückblick')) return 'recap';
       if (text.includes('credits') || text.includes('abspann') || text.includes('end')) return 'credits';
       if (text.includes('ad') || text.includes('anzeige') || text.includes('werbung')) return 'ads';
       return 'unknown-skip';
@@ -2445,6 +2548,10 @@ class VideoPlayerSkipper {
         'button[aria-label*="Recap"], button[aria-label*="Previously"], [aria-label*="Recap"], [aria-label*="Previously"]',
         '[data-testid*="skip"]',
         '[data-qa*="skip"]',
+        // Amazon Prime Video specific selectors
+        '.atvwebplayersdk-skipelement-button',
+        'button.atvwebplayersdk-skipelement-button',
+        '[class*="atvwebplayersdk-skipelement"]',
         // Crunchyroll-specific selectors
         '[class*="skip-button"]',
         '[class*="skipButton"]',
@@ -2571,12 +2678,22 @@ class VideoPlayerSkipper {
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
-    if (!window.videoPlayerSkipper || !(window.videoPlayerSkipper instanceof VideoPlayerSkipper)) {
-      window.videoPlayerSkipper = new VideoPlayerSkipper();
+    try {
+      if (!window.videoPlayerSkipper || !(window.videoPlayerSkipper instanceof VideoPlayerSkipper)) {
+        window.videoPlayerSkipper = new VideoPlayerSkipper();
+        console.log('[Skipper] Initialized on DOMContentLoaded');
+      }
+    } catch (error) {
+      console.error('[Skipper] Failed to initialize:', error);
     }
   });
 } else {
-  if (!window.videoPlayerSkipper || !(window.videoPlayerSkipper instanceof VideoPlayerSkipper)) {
-    window.videoPlayerSkipper = new VideoPlayerSkipper();
+  try {
+    if (!window.videoPlayerSkipper || !(window.videoPlayerSkipper instanceof VideoPlayerSkipper)) {
+      window.videoPlayerSkipper = new VideoPlayerSkipper();
+      console.log('[Skipper] Initialized immediately');
+    }
+  } catch (error) {
+    console.error('[Skipper] Failed to initialize:', error);
   }
 }

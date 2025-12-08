@@ -136,7 +136,12 @@ async function handleSeriesDetected(request, sender) {
 
     // Broadcast live update to any open popups or listeners
     try {
-      chrome.runtime.sendMessage({ action: 'seriesDetected', series, domain });
+      chrome.runtime.sendMessage({ action: 'seriesDetected', series, domain }, (response) => {
+        // Ignore errors - no receiver is fine
+        if (chrome.runtime.lastError) {
+          // Silent - expected when no popup/receiver is open
+        }
+      });
     } catch (e) {
       // Silent fail
     }

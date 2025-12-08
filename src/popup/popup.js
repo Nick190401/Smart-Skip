@@ -673,18 +673,10 @@ class PopupManager {
       this.uiSeriesTitle = this.currentSeries.title;
       this.updateSeriesSettings();
     } else {
-      // Fallback: show last-known series for this domain if available
-      const lastKnown = this.getLastKnownSeriesForDomain();
-      if (lastKnown) {
-        if (seriesNameElement) seriesNameElement.textContent = lastKnown.title;
-        if (seriesEpisodeElement) seriesEpisodeElement.textContent = 'Zuletzt erkannt';
-        if (seriesSection) seriesSection.style.display = 'block';
-        this.uiSeriesTitle = lastKnown.title;
-        this.updateSeriesSettings();
-      } else {
-        if (seriesSection) seriesSection.style.display = 'none';
-        this.uiSeriesTitle = null;
-      }
+      // Don't immediately fallback to "last known" - wait a bit longer for detection
+      // Especially on sites like Crunchyroll where DOM loads slowly
+      if (seriesSection) seriesSection.style.display = 'none';
+      this.uiSeriesTitle = null;
     }
   }
 
