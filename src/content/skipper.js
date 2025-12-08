@@ -2373,28 +2373,35 @@ class VideoPlayerSkipper {
     };
   }
   
-  /** Classify button type by selector and text (intro/recap/credits/ads/next) */
+  /** Classify button type by selector and text (intro/recap/credits/ads/next) - Multi-language support */
   getButtonType(button, selector) {
     const text = (button.textContent || button.getAttribute('aria-label') || button.title || '').toLowerCase();
     const selectorLower = selector.toLowerCase();
 
+    // Multi-language "watch" patterns
     const watchPatterns = [
       'ansehen', 'anschauen', 'watch', 'view', 'play', 'abspielen', 'schauen',
       'ver', 'voir', 'guarda', 'assistir', 'bekijken', 'oglądać', 'смотреть', '見る', '시청', '观看'
     ];
+    
+    // Multi-language "credits" patterns
     const creditsPatterns = [
-      'abspann', 'credits', 'créditos', 'crédits', 'crediti', 'créditos', 'aftiteling', 'napisy końcowe', 'титры', 'クレジット', '크레딧', '片尾'
+      'abspann', 'credits', 'créditos', 'crédits', 'crediti', 'aftiteling', 
+      'napisy końcowe', 'титры', 'クレジット', '크레딧', '片尾', 'ending', 'outro'
     ];
 
     const isWatchButton = watchPatterns.some(pattern => text.includes(pattern));
     const isCreditsButton = creditsPatterns.some(pattern => text.includes(pattern));
 
+    // Netflix-specific data attributes
     if (button.getAttribute('data-uia') === 'watch-credits-seamless-button') {
       return 'watch-abspann';
     }
     if (button.getAttribute('data-uia') === 'next-episode-seamless-button') {
       return 'next';
     }
+    
+    // Watch Credits button
     if (isCreditsButton && isWatchButton) {
       if (window.location.hostname.includes('netflix.')) {
         return 'watch-abspann';
@@ -2406,69 +2413,109 @@ class VideoPlayerSkipper {
       return 'watch';
     }
     
+    // Selector-based classification
     if (selectorLower.includes('intro') || selectorLower.includes('opening')) return 'intro';
     if (selectorLower.includes('recap') || selectorLower.includes('previously')) return 'recap';
     if (selectorLower.includes('credits') || selectorLower.includes('end') || selectorLower.includes('closing')) return 'credits';
     if (selectorLower.includes('ad') || selectorLower.includes('advertisement')) return 'ads';
     if (selectorLower.includes('next') || selectorLower.includes('continue') || selectorLower.includes('advance')) return 'next';
     
-    const skipPatterns = ['skip', 'überspringen', 'pular'];
+    // Multi-language "skip" patterns
+    const skipPatterns = [
+      'skip', 'überspringen', 'pular', 'saltar', 'passer', 'salta', 
+      'overslaan', 'pomiń', 'пропустить', 'スキップ', '건너뛰기', '跳过'
+    ];
     const isSkipButton = skipPatterns.some(pattern => text.includes(pattern));
     
     if (isSkipButton) {
-      if (text.includes('intro') || text.includes('opening') || text.includes('vorspann')) return 'intro';
-      if (text.includes('recap') || text.includes('previously') || text.includes('zuvor') || text.includes('zusammenfassung') || text.includes('rückblick')) return 'recap';
-      if (text.includes('credits') || text.includes('abspann') || text.includes('end')) return 'credits';
-      if (text.includes('ad') || text.includes('anzeige') || text.includes('werbung')) return 'ads';
+      // Multi-language intro patterns
+      if (text.includes('intro') || text.includes('opening') || text.includes('vorspann') || 
+          text.includes('abertura') || text.includes('générique') || text.includes('apertura') ||
+          text.includes('オープニング') || text.includes('오프닝') || text.includes('片头')) {
+        return 'intro';
+      }
+      
+      // Multi-language recap patterns
+      if (text.includes('recap') || text.includes('previously') || text.includes('zuvor') || 
+          text.includes('zusammenfassung') || text.includes('rückblick') || text.includes('resumen') ||
+          text.includes('résumé') || text.includes('resumo') || text.includes('riepilogo') ||
+          text.includes('samenvatting') || text.includes('podsumowanie') || text.includes('要約') ||
+          text.includes('요약') || text.includes('回顾')) {
+        return 'recap';
+      }
+      
+      // Multi-language credits patterns (already checked above)
+      if (isCreditsButton) {
+        return 'credits';
+      }
+      
+      // Multi-language ad patterns
+      if (text.includes('ad') || text.includes('anzeige') || text.includes('werbung') ||
+          text.includes('anuncio') || text.includes('publicité') || text.includes('pubblicit') ||
+          text.includes('anúncio') || text.includes('advertentie') || text.includes('reklama') ||
+          text.includes('реклама') || text.includes('広告') || text.includes('광고') || text.includes('广告')) {
+        return 'ads';
+      }
+      
       return 'unknown-skip';
     }
     
-    if (text.includes('skip') || text.includes('überspringen')) {
-      return 'unknown-skip';
-    }
-    
+    // Check aria-label as fallback
     const ariaLabel = (button.getAttribute('aria-label') || '').toLowerCase();
-    if (ariaLabel.includes('skip') || ariaLabel.includes('überspringen')) {
-      if (ariaLabel.includes('intro') || ariaLabel.includes('opening')) return 'intro';
-      if (ariaLabel.includes('recap') || ariaLabel.includes('previously')) return 'recap';
-      if (ariaLabel.includes('credits') || ariaLabel.includes('abspann')) return 'credits';
-      if (ariaLabel.includes('ad') || ariaLabel.includes('anzeige')) return 'ads';
+    const ariaHasSkip = skipPatterns.some(pattern => ariaLabel.includes(pattern));
+    
+    if (ariaHasSkip) {
+      if (ariaLabel.includes('intro') || ariaLabel.includes('opening') || ariaLabel.includes('vorspann') ||
+          ariaLabel.includes('オープニング') || ariaLabel.includes('오프닝')) return 'intro';
+      if (ariaLabel.includes('recap') || ariaLabel.includes('previously') || ariaLabel.includes('zusammenfassung')) return 'recap';
+      if (creditsPatterns.some(p => ariaLabel.includes(p))) return 'credits';
+      if (ariaLabel.includes('ad') || ariaLabel.includes('anzeige') || ariaLabel.includes('werbung')) return 'ads';
       return 'unknown-skip';
     }
     
     return 'unknown';
   }
   
-  /** Text/aria-only classifier as a secondary pass. */
+  /** Text/aria-only classifier as a secondary pass - Multi-language support */
   getButtonTypeFromText(button) {
     const text = (button.textContent || button.getAttribute('aria-label') || '').toLowerCase();
 
-    // Intro patterns (English + German)
-    if (/intro|opening|vorspann/.test(text)) return 'intro';
+    // Multi-language intro patterns
+    // English, German, Spanish, French, Portuguese, Italian, Dutch, Polish, Russian, Japanese, Korean, Chinese
+    if (/intro|opening|vorspann|abertura|générique|apertura|オープニング|오프닝|片头/.test(text)) {
+      return 'intro';
+    }
     
-    // Recap patterns (English + German)
-    if (/recap|previously|zuvor|rückblick/.test(text)) return 'recap';
+    // Multi-language recap patterns
+    if (/recap|previously|zuvor|rückblick|zusammenfassung|resumen|résumé|resumo|riepilogo|samenvatting|podsumowanie|要約|요약|回顾/.test(text)) {
+      return 'recap';
+    }
     
-    // Credits/Ending patterns (English + German)
-    // "Credits Überspringen", "Abspann überspringen", "Skip Credits", "Skip Ending"
-    if (/credits|abspann|ending|outro/.test(text)) {
-      // Make sure it's not a "Watch Credits" or similar button
-      if (/watch|ansehen|schaue/.test(text)) return 'watch-credits';
+    // Multi-language credits/ending patterns
+    if (/credits|abspann|ending|outro|créditos|crédits|crediti|aftiteling|napisy końcowe|титры|クレジット|크레딧|片尾/.test(text)) {
+      // Make sure it's not a "Watch Credits" button
+      if (/watch|ansehen|schaue|ver|voir|guarda|assistir|bekijken|oglądać|смотреть|見る|시청|观看/.test(text)) {
+        return 'watch-credits';
+      }
       return 'credits';
     }
     
-    // Ad patterns (English + German)
-    if (/ad|anzeige|werbung|commercial/.test(text)) return 'ads';
+    // Multi-language ad patterns
+    if (/ad|anzeige|werbung|commercial|anuncio|publicité|pubblicit|anúncio|advertentie|reklama|реклама|広告|광고|广告/.test(text)) {
+      return 'ads';
+    }
     
-    // Next episode patterns (English + German)
-    if (/next|nächste|continue|weiter|fortsetzen/.test(text)) return 'next';
+    // Multi-language next episode patterns
+    if (/next|nächste|continue|weiter|fortsetzen|siguiente|próximo|suivant|prossimo|próximo|volgende|następny|следующий|次|다음|下一个/.test(text)) {
+      return 'next';
+    }
     
-    // Generic skip pattern (catches "Überspringen", "Skip", etc.)
-    if (/skip|überspringen|vorspulen/.test(text)) {
+    // Multi-language skip patterns
+    if (/skip|überspringen|vorspulen|pular|saltar|passer|salta|overslaan|pomiń|пропустить|スキップ|건너뛰기|跳过/.test(text)) {
       // Try to infer type from context
-      if (/intro|opening/.test(text)) return 'intro';
-      if (/credits|abspann|ending/.test(text)) return 'credits';
-      if (/recap|previously/.test(text)) return 'recap';
+      if (/intro|opening|vorspann|abertura|générique|オープニング/.test(text)) return 'intro';
+      if (/credits|abspann|ending|créditos|クレジット|片尾/.test(text)) return 'credits';
+      if (/recap|previously|zusammenfassung|resumen|résumé|要約/.test(text)) return 'recap';
       // Default to generic skip (treat as ads)
       return 'unknown-skip';
     }
@@ -2622,7 +2669,8 @@ class VideoPlayerSkipper {
       ) || '').toLowerCase();
 
       // Multi-language patterns for skip/next/credits buttons
-      const skipPatterns = /skip|intro|opening|recap|previously|credits|abspann|ad|werbung|next|weiter|continue|nächste|fortsetzen|überspringen|vorspulen|ending|outro/i;
+      // Covers: English, German, Spanish, French, Portuguese, Italian, Dutch, Polish, Russian, Japanese, Korean, Chinese
+      const skipPatterns = /skip|intro|opening|recap|previously|credits|abspann|ad|werbung|next|weiter|continue|nächste|fortsetzen|überspringen|vorspulen|ending|outro|pular|saltar|passer|salta|overslaan|pomiń|пропустить|スキップ|건너뛰기|跳过|vorspann|abertura|générique|apertura|オープニング|오프닝|片头|zuvor|rückblick|zusammenfassung|resumen|résumé|resumo|riepilogo|samenvatting|podsumowanie|要約|요약|回顾|créditos|crédits|crediti|aftiteling|napisy końcowe|титры|クレジット|크레딧|片尾|anzeige|anuncio|publicité|pubblicit|anúncio|advertentie|reklama|реклама|広告|광고|广告|siguiente|próximo|suivant|prossimo|volgende|następny|следующий|次|다음|下一个/i;
       const looksLikeControl = skipPatterns.test(text + ' ' + dataAttrs);
 
       if (looksLikeControl) return true;
