@@ -1030,6 +1030,8 @@ Our amazing beta testers who help identify and fix issues across different platf
 
 *Made with ❤️ for binge-watchers everywhere*
 
+**Developed by [KernelMinds.de](https://kernelminds.de)**
+
 <br>
 
 ![Streaming Experience](https://via.placeholder.com/600x200/667eea/ffffff?text=🎬+Happy+Streaming+with+Smart+Skip!)
