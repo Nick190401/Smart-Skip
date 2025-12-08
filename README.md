@@ -8,7 +8,7 @@
 <br>
 
 [![Firefox Extension](https://img.shields.io/badge/Firefox-Extension-FF7139?style=for-the-badge&logo=firefox&logoColor=white)](https://addons.mozilla.org/firefox/)
-[![Version](https://img.shields.io/badge/version-1.1.9-4285F4?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Nick190401/Smart-Skip)
+[![Version](https://img.shields.io/badge/version-1.2.0-4285F4?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Nick190401/Smart-Skip)
 [![License](https://img.shields.io/badge/license-Custom-28A745?style=for-the-badge&logo=book&logoColor=white)](LICENSE)
 [![Manifest V3](https://img.shields.io/badge/manifest-v3-9C27B0?style=for-the-badge&logo=google-chrome&logoColor=white)](manifest.json)
 
@@ -303,12 +303,16 @@ graph LR
 
 <div align="center">
 
+**🌍 Comprehensive International Support**
+
 | 🇺🇸 English | 🇩🇪 Deutsch | 🇫🇷 Français | 🇪🇸 Español |
 |:-------------|:-------------|:-------------|:-------------|
 | 🇮🇹 Italiano | 🇵🇹 Português | 🇳🇱 Nederlands | 🇵🇱 Polski |
 | 🇷🇺 Русский | 🇯🇵 日本語 | 🇰🇷 한국어 | 🇨🇳 中文 |
 
-*Auto-detection with manual override*
+*Automatically detects and clicks skip buttons in 12 languages*
+
+**New in v1.2.0:** Enhanced pattern recognition for international streaming platforms
 
 </div>
 
@@ -338,9 +342,9 @@ graph LR
 <td width="50%">
 
 #### 🌍 **Advanced Recognition**
-- **🗣️ Multi-Language** → Button detection in 12+ languages
+- **🗣️ Multi-Language** → Button detection in 12 languages (English, German, Spanish, French, Portuguese, Italian, Dutch, Polish, Russian, Japanese, Korean, Chinese)
 - **⏱️ Smart Cooldown** → Prevents rapid-fire clicking and spam
-- **🎮 Universal Patterns** → Language-independent button matching
+- **🎮 Universal Patterns** → Language-independent button matching with regex
 - **📱 Responsive Design** → Adapts to different screen sizes
 
 </td>
@@ -841,6 +845,29 @@ This project is licensed under a custom License - see the [LICENSE](LICENSE) fil
 </table>
 
 ### 📈 **Development Timeline**
+
+<details open>
+<summary><strong>🎉 Version 1.2.0 - International Edition (Current)</strong></summary>
+
+**🌍 Major Features:**
+- 🗣️ **Enhanced Multi-Language Support** → Comprehensive button detection in 12 languages:
+  - English, German, Spanish, French, Portuguese, Italian
+  - Dutch, Polish, Russian, Japanese, Korean, Chinese
+- 🔍 **Improved Pattern Recognition** → Advanced regex patterns for international platforms
+- 🐛 **Bug Fixes:**
+  - Fixed Crunchyroll series detection in iframe contexts
+  - Enhanced Amazon Prime Video episode extraction and skip button detection
+  - Improved Netflix AutoNext timing (only clicks post-play, not control bar)
+  - Better opacity threshold detection for invisible buttons
+- 📝 **Code Quality** → Complete code documentation overhaul (English developer comments)
+- 🎯 **Global Compatibility** → Works seamlessly across all language settings on supported platforms
+
+**🔧 Technical Improvements:**
+- Multi-language text pattern matching in button classification functions
+- Enhanced safety checks to avoid clicking navigation elements
+- Improved iframe isolation for better performance
+
+</details>
 
 <details>
 <summary><strong>🎯 Version 1.1.5 - Multi-Language Expansion</strong></summary>
