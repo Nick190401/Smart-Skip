@@ -1,8 +1,7 @@
 /**
- * VideoPlayerSkipper (Content Script)
- * - Detects current series/episode and auto-clicks Skip/Next controls
- * - Renders a lightweight, draggable HUD with compact/advanced modes
- * - Minimizes interference by scoping actions to the player container
+ * VideoPlayerSkipper - Auto-skip intro/recap/credits on streaming platforms
+ * Detects current series/episode and auto-clicks skip/next buttons
+ * Includes draggable HUD for manual control
  */
 class VideoPlayerSkipper {
   constructor() {
@@ -22,14 +21,13 @@ class VideoPlayerSkipper {
     this.lastSeriesDetection = 0;
   this.lastDetectionUrl = null;
   this.lastDomStateHash = null;
-  // HUD and countdown state
+  
   this.hud = null;
   this.hudStyleEl = null;
   this.hudDragging = false;
   this.hudDragOffset = { x: 0, y: 0 };
   this.autoNextTimeoutId = null;
   this.countdownOverlay = null;
-  // HUD visibility state
   this.hudHideTimeoutId = null;
   this.hudHideDelay = 2500;
   this.hudBoundContainer = null;
@@ -92,7 +90,7 @@ class VideoPlayerSkipper {
     // Kick off initialization; avoid throwing in constructor
     this.init();
 
-    // Swallow noisy rejections when the extension reloads and invalidates the context
+    // Suppress extension context invalidation errors on reload
     try {
       window.addEventListener('unhandledrejection', (e) => {
         const msg = String((e && (e.reason && (e.reason.message || e.reason) || '')) || '').toLowerCase();
@@ -109,14 +107,13 @@ class VideoPlayerSkipper {
     } catch (_) {}
   }
   /**
-   * Safely send a runtime message without throwing if extension context is invalidated
-   * (e.g., during reload/navigation) or when no receiver is present.
+   * Send runtime messages safely (handles extension reload/context invalidation)
    */
   safeRuntimeSendMessage(message) {
     try {
       if (!this.isExtensionContextValid() || !chrome.runtime.sendMessage) return;
       const ret = chrome.runtime.sendMessage(message);
-      // If Promise-like (Firefox/Chromium MV3), swallow rejections
+      // Swallow promise rejections
       if (ret && typeof ret.then === 'function') {
         ret.catch(() => {});
       }
@@ -125,7 +122,7 @@ class VideoPlayerSkipper {
     }
   }
 
-  /** Check whether the extension context is still valid (not reloaded). */
+  /** Check if extension context is still valid */
   isExtensionContextValid() {
     try {
       return !!(typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id);
@@ -782,9 +779,9 @@ class VideoPlayerSkipper {
       this.autoNextTimeoutId = setTimeout(tick, 1000);
     } catch (e) {}
   }
-  /** Initialization pipeline: detect language, load settings, wire observers, start. */
+  /** Initialize: detect language, load settings, setup observers, start scanning */
   async init() {
-    // CRITICAL: Don't initialize in iframe contexts - only in main page
+    // Skip initialization in iframe contexts - only run in main window
     const url = window.location.href;
     const isIframeContext = url.includes('player.html') || 
                            url.includes('sw_iframe') ||
@@ -795,12 +792,10 @@ class VideoPlayerSkipper {
     
     if (isIframeContext) {
       console.log('[Skipper] 🚫 SKIPPING INITIALIZATION - running in iframe/worker context:', url);
-      return; // Don't initialize anything in iframes
+      return;
     }
     
     console.log('[Skipper] ✅ INITIALIZING - main page context:', url);
-    
-    // Initialization proceeds regardless of built-in supported platforms; actual enablement is controlled by settings
     
     this.detectedLanguage = this.detectPageLanguage();
     this.buttonPatterns = this.generateButtonPatterns();
@@ -846,13 +841,14 @@ class VideoPlayerSkipper {
     }
   }
   
-  /** Load settings from storage with multi-layer fallbacks and set enable flags. */
+  /** Load settings from storage (sync → local → localStorage fallback) */
   async loadSettings() {
     try {
       if (!this.isExtensionContextValid()) return;
       let loadedSettings = null;
       let loadMethod = '';
       
+      // Try chrome.storage.sync first
       try {
         if (chrome.storage && chrome.storage.sync) {
           const result = await chrome.storage.sync.get(['skipperSettings']);
@@ -865,6 +861,7 @@ class VideoPlayerSkipper {
         // Silent fail
       }
       
+      // Fallback to chrome.storage.local
       if (!loadedSettings) {
         try {
           if (chrome.storage && chrome.storage.local) {
@@ -915,7 +912,7 @@ class VideoPlayerSkipper {
     }
   }
 
-  /** React to storage updates and hot-apply HUD enable/disable and runtime flags. */
+  /** Handle storage changes and apply settings updates */
   handleStorageChange(changes) {
     if (changes.skipperSettings) {
       const newSettings = changes.skipperSettings.newValue;
@@ -936,7 +933,7 @@ class VideoPlayerSkipper {
           }
         }
 
-        // Reflect HUD visibility changes live
+        // Apply HUD visibility changes live
         const nextHudEnabled = this.isHudEnabled();
         if (nextHudEnabled && !this.hud) {
           this.ensureHUD();
@@ -947,7 +944,7 @@ class VideoPlayerSkipper {
     }
   }
   
-  /** Setup series detection loops and observers. */
+  /** Setup series detection with observers and intervals */
   startSeriesDetection() {
     this.detectCurrentSeries();
     
@@ -961,7 +958,7 @@ class VideoPlayerSkipper {
     this.setupVideoEventDetection();
   }
   
-  /** Adjust series detection frequency based on current context. */
+  /** Adjust series detection frequency based on current context */
   updateSeriesCheckInterval() {
     if (this.seriesCheckInterval) {
       clearInterval(this.seriesCheckInterval);
@@ -1003,7 +1000,7 @@ class VideoPlayerSkipper {
     return result;
   }
   
-  /** Hook into SPA navigation APIs to re-detect series on URL changes. */
+  /** Setup SPA navigation detection (pushState/popstate) */
   setupUrlChangeDetection() {
     const originalPushState = history.pushState;
     const originalReplaceState = history.replaceState;
@@ -1027,7 +1024,7 @@ class VideoPlayerSkipper {
     });
   }
   
-  /** Observe DOM mutations for title/series indicators and debounce detection. */
+  /** Observe DOM mutations for title/series changes */
   setupContentChangeDetection() {
     this.contentObserver = new MutationObserver((mutations) => {
       let shouldCheckSeries = false;
@@ -1099,7 +1096,7 @@ class VideoPlayerSkipper {
     });
   }
   
-  /** Heuristics: user clicks suggesting series change trigger re-detection. */
+  /** Detect user clicks on episode/series elements */
   setupButtonClickDetection() {
     document.addEventListener('click', (event) => {
       const target = event.target;
@@ -1212,7 +1209,7 @@ class VideoPlayerSkipper {
     }, true);
   }
   
-  /** Listen to <video> lifecycle events to time series detection accurately. */
+  /** Setup video element event listeners for series detection */
   setupVideoEventDetection() {
     const checkVideoEvents = () => {
       const videos = document.querySelectorAll('video');
@@ -1278,7 +1275,7 @@ class VideoPlayerSkipper {
     this.videoObserver = videoObserver;
   }
   
-  /** Re-evaluate series when URL transitions occur, with gentle delay. */
+  /** Handle URL changes and trigger series detection */
   handleUrlChange() {
     const currentUrl = window.location.href;
     if (currentUrl !== this.lastUrl) {
@@ -1297,7 +1294,7 @@ class VideoPlayerSkipper {
     }
   }
   
-  /** Coarse filter to distinguish content pages from browse/home. */
+  /** Check if URL is a content page (not browse/home) */
   isUrlContentPage(url) {
     if (!url) return false;
     
@@ -1314,8 +1311,8 @@ class VideoPlayerSkipper {
   }
 
   /**
-   * Core series detection orchestrator.
-   * Uses lightweight hashing to skip redundant runs and defers to domain-specific extractors.
+   * Detect current series/episode from DOM
+   * Uses DOM state hashing to skip redundant runs
    */
   detectCurrentSeries() {
     const now = Date.now();
@@ -1509,7 +1506,7 @@ class VideoPlayerSkipper {
     }
   }
 
-  /** Dispatch to domain extractors or generic fallback. */
+  /** Route to platform-specific series extractor */
   extractSeriesInfo() {
     const domain = this.domain;
 
@@ -1546,7 +1543,7 @@ class VideoPlayerSkipper {
     }
   }
 
-  /** Netflix extractor: robust title/episode inference across pages. */
+  /** Extract series/episode info from Netflix DOM */
   extractNetflixSeries() {
     let title = null;
     let episode = null;
@@ -1878,7 +1875,7 @@ class VideoPlayerSkipper {
     return null;
   }
 
-  /** YouTube extractor (treats single videos as a series-like unit). */
+  /** Extract series/episode info from YouTube DOM */
   extractYouTubeSeries() {
     let title = document.querySelector('#title h1')?.textContent?.trim();
     if (!title) title = document.querySelector('h1.ytd-video-primary-info-renderer')?.textContent?.trim();
@@ -1890,7 +1887,7 @@ class VideoPlayerSkipper {
     return null;
   }
 
-  /** Crunchyroll extractor. */
+  /** Extract series/episode info from Crunchyroll DOM */
   extractCrunchyrollSeries() {
     try {
       console.log('[Skipper] extractCrunchyrollSeries - attempting selectors on URL:', window.location.href);
@@ -2067,7 +2064,7 @@ class VideoPlayerSkipper {
     return null;
   }
 
-  /** Apple TV+ extractor. */
+  /** Extract series/episode info from Apple TV+ DOM */
   extractAppleTVSeries() {
     let title = document.querySelector('.product-header__title')?.textContent?.trim();
     if (!title) title = document.title?.replace(' - Apple TV+', '').trim();
@@ -2080,7 +2077,7 @@ class VideoPlayerSkipper {
     return null;
   }
 
-  /** Fallback extractor using document/title heuristics. */
+  /** Generic fallback extractor using DOM heuristics */
   extractGenericSeries() {
     let title = document.querySelector('h1')?.textContent?.trim();
     if (!title) title = document.title?.split(' - ')[0]?.trim();
@@ -2091,7 +2088,7 @@ class VideoPlayerSkipper {
     return null;
   }
 
-  /** Persist current settings back to storage (sync → local fallback). */
+  /** Save settings to chrome.storage (sync → local fallback) */
   async saveSettings() {
     try {
       if (!this.settings || typeof this.settings !== 'object') {
@@ -2117,7 +2114,7 @@ class VideoPlayerSkipper {
     }
   }
 
-  /** Handle messages from popup/background (detect, update settings, ping, etc.). */
+  /** Handle runtime messages from popup/background */
   handleMessage(request, sender, sendResponse) {
     switch (request.action) {
       case 'detectSeries':
@@ -2309,8 +2306,7 @@ class VideoPlayerSkipper {
     }
   }
 
-  // Try to scope queries to the actual player container to avoid touching sidebars (e.g., YouTube #secondary)
-  /** Try to scope actions to the most likely player container. */
+  /** Get player container element (scoped to avoid sidebars) */
   getPlayerContainer() {
     try {
       
@@ -2349,7 +2345,7 @@ class VideoPlayerSkipper {
     }
   }
   
-  /** Gather effective per-series settings (with defaults). */
+  /** Get current series settings (with defaults) */
   getCurrentSeriesSettings() {
     if (this.currentSeries && this.currentSeries.title) {
       const seriesKey = `${this.domain}:${this.currentSeries.title}`;
@@ -2377,7 +2373,7 @@ class VideoPlayerSkipper {
     };
   }
   
-  /** Classify a button by selector and textual/aria cues into intro/recap/credits/ads/next. */
+  /** Classify button type by selector and text (intro/recap/credits/ads/next) */
   getButtonType(button, selector) {
     const text = (button.textContent || button.getAttribute('aria-label') || button.title || '').toLowerCase();
     const selectorLower = selector.toLowerCase();
@@ -2567,12 +2563,12 @@ class VideoPlayerSkipper {
     };
   }
 
-  /** Enable/disable verbose logging dynamically. */
+  /** Enable/disable verbose logging */
   setVerboseLogging(enabled) {
     this.verboseLogging = enabled;
   }
 
-  /** Visibility/viewport checks to ensure the button is actionable. */
+  /** Check if button is visible and clickable */
   isButtonClickable(button) {
     try {
       if (!button) return false;
@@ -2581,7 +2577,11 @@ class VideoPlayerSkipper {
       if (button.disabled) return false;
 
       const style = window.getComputedStyle(button);
-      if (!style || style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;
+      if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
+      
+      // Check opacity - must be reasonably visible (> 0.1)
+      const opacity = parseFloat(style.opacity || '1');
+      if (opacity < 0.1) return false;
 
       // Must have some layout size and be in the viewport
       const rect = button.getBoundingClientRect();
@@ -2597,7 +2597,7 @@ class VideoPlayerSkipper {
     }
   }
 
-  /** Additional safety checks to avoid navigating links or non-control elements. */
+  /** Additional safety checks (avoid navigation links, verify control elements) */
   shouldClickButton(button) {
     // Don't click plain links that navigate away unless they are clearly skip/next controls
     try {
@@ -2652,10 +2652,47 @@ class VideoPlayerSkipper {
   }
 
   shouldClickBasedOnTiming(button) {
+    // For Netflix: Only click "Next Episode" if it's in the post-play UI, not the control bar
+    if (window.location.hostname.includes('netflix.com')) {
+      const buttonDataUia = button.getAttribute('data-uia');
+      
+      // Explicitly block control bar next buttons
+      const isControlBarNext = buttonDataUia === 'control-next';
+      if (isControlBarNext) {
+        return false; // Never click the control bar next button
+      }
+      
+      // Check if button is in post-play container
+      const isInPostPlay = button.closest('[data-uia*="postplay"]') || 
+                          button.closest('.postplay') ||
+                          button.closest('[class*="PostPlay"]') ||
+                          button.closest('[class*="post-play"]');
+      
+      // If it has next-episode data attribute, it's the post-play button
+      const hasNextEpisodeAttr = buttonDataUia === 'next-episode-seamless-button';
+      
+      if (hasNextEpisodeAttr) {
+        return true;
+      }
+      
+      // Don't click if it's in the control bar
+      const isInControls = button.closest('.watch-video--bottom-controls-container') ||
+                          button.closest('[class*="PlayerControls"]') ||
+                          button.closest('.PlayerControls') ||
+                          button.closest('[class*="controls"]');
+      
+      if (isInControls && !isInPostPlay && !hasNextEpisodeAttr) {
+        return false; // Don't click control bar buttons
+      }
+      
+      // Only click if in post-play or has the specific next-episode attribute
+      return isInPostPlay || hasNextEpisodeAttr;
+    }
+    
     return true;
   }
 
-  /** Click the element safely and log the action via background for telemetry. */
+  /** Click button safely and send telemetry to background */
   clickButton(button, reason) {
     if (!button || !this.isButtonClickable(button)) return;
     
