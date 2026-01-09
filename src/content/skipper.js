@@ -34,6 +34,18 @@ class VideoPlayerSkipper {
   this.hudInteracting = false;
   this.hudUserMoved = false;
     
+    // Time-based skipping for platforms without skip buttons (Viki, etc.)
+    this.videoTimeMonitor = null;
+    this.lastVideoTime = 0;
+    this.introSkipped = false;
+    this.outroSkipped = false;
+    this.currentVideoElement = null;
+    // Multi-sensor intro detection - continuous checking until found
+    this.introDetectionCache = null;
+    // Frame analysis for visual intro detection
+    this.videoFrameAnalyzer = null;
+    this.frameSamples = [];
+    
     this.supportedDomains = [
       'netflix.',
       'disneyplus.',
@@ -57,6 +69,7 @@ class VideoPlayerSkipper {
       'zdf.',
       'ard.',
       'mediathek.',
+      'viki.com',
       'twitch.tv',
       'vimeo.com',
       'dailymotion.com'
@@ -1249,18 +1262,21 @@ class VideoPlayerSkipper {
           setTimeout(() => {
             this.detectCurrentSeries();
           }, 1000);
+          this.setupTimeBasedSkipping(video);
         });
         
         video.addEventListener('loadedmetadata', () => {
           setTimeout(() => {
             this.detectCurrentSeries();
           }, 500);
+          this.setupTimeBasedSkipping(video);
         });
         
         video.addEventListener('playing', () => {
           setTimeout(() => {
             this.detectCurrentSeries();
           }, 1000);
+          this.setupTimeBasedSkipping(video);
         });
         
         video.addEventListener('canplay', () => {
@@ -1270,6 +1286,7 @@ class VideoPlayerSkipper {
               this.detectCurrentSeries();
             }, 1500);
           }
+          this.setupTimeBasedSkipping(video);
         });
       });
     };
@@ -1519,6 +1536,8 @@ class VideoPlayerSkipper {
         return this.extractCrunchyrollSeries();
       } else if (domain.includes('apple.com')) {
         return this.extractAppleTVSeries();
+      } else if (domain.includes('viki.com')) {
+        return this.extractVikiSeries();
       } else {
         return this.extractGenericSeries();
       }
@@ -2033,6 +2052,70 @@ class VideoPlayerSkipper {
     return null;
   }
 
+  /** Extract series/episode info from Viki DOM */
+  extractVikiSeries() {
+    try {
+      // PRIORITY: Try og:title meta tag first (most reliable)
+      const ogTitle = document.querySelector('meta[property="og:title"]')?.content;
+      if (ogTitle) {
+        // Format: "Glory - Episode 1 | Rakuten Viki"
+        const match = ogTitle.match(/^(.+?)\s*-\s*Episode\s*(\d+)(?:\s*[-:]\s*(.+?))?\s*\|\s*Rakuten Viki/i);
+        if (match) {
+          let episode = `E${match[2]}`;
+          if (match[3]) episode += ` - ${match[3].trim()}`;
+          
+          return { 
+            title: match[1].trim(), 
+            episode: episode, 
+            source: 'viki' 
+          };
+        }
+      }
+      
+      // Fallback: Try to get series title from page
+      let title = document.querySelector('.video-header__title')?.textContent?.trim();
+      if (!title) title = document.querySelector('[data-t="title"]')?.textContent?.trim();
+      if (!title) title = document.querySelector('.title')?.textContent?.trim();
+      if (!title) title = document.querySelector('h1')?.textContent?.trim();
+      
+      // Try to get episode info
+      let episode = null;
+      const episodeEl = document.querySelector('.video-header__subtitle');
+      if (episodeEl) {
+        const epText = episodeEl.textContent.trim();
+        // Parse episode like "Episode 1" or "Ep. 1 - Title"
+        const match = epText.match(/(?:Episode|Ep\.?)\s*(\d+)(?:\s*[-:]\s*(.+))?/i);
+        if (match) {
+          episode = `E${match[1]}`;
+          if (match[2]) episode += ` - ${match[2].trim()}`;
+        } else {
+          episode = epText;
+        }
+      }
+      
+      // Fallback to URL parsing
+      if (!title || !episode) {
+        const urlMatch = window.location.pathname.match(/\/videos\/([^\/]+)/);
+        if (urlMatch && !title) {
+          title = urlMatch[1].replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        }
+      }
+      
+      // Clean title from common suffixes
+      if (title) {
+        title = title.replace(/\s*-\s*Viki$/, '').trim();
+        title = title.replace(/\s*\|\s*Rakuten Viki$/, '').trim();
+      }
+      
+      if (title) {
+        return { title, episode: episode || 'unknown', source: 'viki' };
+      }
+    } catch (error) {
+      console.error('[Skipper] extractVikiSeries error:', error);
+    }
+    return null;
+  }
+
   /** Generic fallback extractor using DOM heuristics */
   extractGenericSeries() {
     let title = document.querySelector('h1')?.textContent?.trim();
@@ -2042,6 +2125,660 @@ class VideoPlayerSkipper {
       return { title, episode: 'unknown', source: 'generic' };
     }
     return null;
+  }
+
+  /** Setup time-based intro/outro skipping for platforms without skip buttons */
+  setupTimeBasedSkipping(video) {
+    if (!video || this.currentVideoElement === video) return;
+    
+    // Only enable for platforms without native skip buttons
+    const needsTimeBasedSkipping = this.domain.includes('viki.com');
+    if (!needsTimeBasedSkipping) return;
+    
+    this.currentVideoElement = video;
+    this.introSkipped = false;
+    this.outroSkipped = false;
+    this.introDetectionCache = null;
+    this.frameSamples = [];
+    
+    // Start visual frame analysis for intro detection
+    this.startFrameAnalysis(video);
+    
+    // Clear existing monitor
+    if (this.videoTimeMonitor) {
+      clearInterval(this.videoTimeMonitor);
+    }
+    
+    // Monitor video time every 500ms for data-driven detection
+    this.videoTimeMonitor = setInterval(() => {
+      if (video.paused || !this.isEnabled) return;
+      
+      const currentTime = video.currentTime;
+      const duration = video.duration;
+      
+      if (isNaN(duration) || duration === 0) return;
+      
+      const seriesSettings = this.getCurrentSeriesSettings();
+      
+      // Multi-sensor intro detection - ONLY data-based
+      if (!this.introSkipped && seriesSettings.skipIntro && currentTime < 180) {
+        // Use cached detection result if available
+        let introData = this.introDetectionCache;
+        
+        // CONTINUOUS detection: Try to detect intro every time until we find one or pass 3 minutes
+        // Only avoid re-detection if we already have a cached result
+        if (!introData) {
+          introData = this.detectIntroEnd(video, currentTime);
+          
+          if (introData) {
+            this.introDetectionCache = introData; // Cache once found
+            console.log('[Skipper] ✅ Intro cached for this video:', introData);
+          } else {
+            // FALLBACK: Check if user has manually defined intro times for this series
+            const manualIntro = seriesSettings.manualIntroTimes;
+            if (manualIntro && manualIntro.start !== undefined && manualIntro.end !== undefined) {
+              introData = { start: manualIntro.start, end: manualIntro.end };
+              this.introDetectionCache = introData;
+              console.log('[Skipper] ✅ Using manual intro times:', introData);
+            }
+          }
+        }
+        
+        // Skip if we detected an intro and we're in the intro range
+        if (introData && currentTime >= introData.start && currentTime < introData.end) {
+          console.log('[Skipper] ⏩ Multi-sensor intro skip:', 
+            `${currentTime.toFixed(1)}s → ${introData.end.toFixed(1)}s`,
+            `(duration: ${(introData.end - introData.start).toFixed(1)}s)`
+          );
+          video.currentTime = introData.end;
+          this.introSkipped = true;
+          this.showSkipNotification('Intro skipped');
+        }
+      }
+      
+      // Skip outro/credits (last 120 seconds) - only if video is longer than 3 minutes
+      if (!this.outroSkipped && duration > 180 && duration - currentTime < 120 && currentTime > 60 && seriesSettings.skipCredits) {
+        console.log('[Skipper] ⏩ Auto-skipping outro at', currentTime, 'seconds');
+        video.currentTime = duration - 5; // Go near the end
+        this.outroSkipped = true;
+        this.showSkipNotification('Credits skipped');
+      }
+      
+      this.lastVideoTime = currentTime;
+    }, 500);
+    
+    // Reset flags on new video
+    video.addEventListener('ended', () => {
+      this.introSkipped = false;
+      this.outroSkipped = false;
+      if (this.videoFrameAnalyzer) {
+        clearInterval(this.videoFrameAnalyzer);
+        this.videoFrameAnalyzer = null;
+      }
+    });
+    
+    video.addEventListener('seeked', () => {
+      // If user seeks, respect their choice
+      if (Math.abs(video.currentTime - this.lastVideoTime) > 10) {
+        if (video.currentTime < 150) this.introSkipped = false;
+        if (video.duration - video.currentTime > 120) this.outroSkipped = false;
+      }
+    });
+  }
+
+  /** Detect intro end using MULTIPLE data-based methods - NO assumptions */
+  detectIntroEnd(video, currentTime) {
+    // Don't try to detect intro after 3 minutes (safety limit only)
+    if (currentTime > 180) return null;
+    
+    // Collect evidence from multiple sources
+    // Note: These methods are called every 500ms, so they need to be fast
+    const evidence = {
+      subtitle: this.detectSubtitlePattern(video),
+      volume: this.detectVolumePattern(video),
+      scene: this.detectSceneChange(video),
+      metadata: this.detectMetadataMarkers(video)
+    };
+    
+    // Count how many sources found something
+    const foundCount = [evidence.subtitle, evidence.volume, evidence.scene, evidence.metadata]
+      .filter(e => e !== null).length;
+    
+    // Debug: Log what we found (only every 10 seconds to reduce spam)
+    if (Math.floor(currentTime / 10) !== Math.floor((this.lastVideoTime || 0) / 10)) {
+      console.log('[Skipper] 🔍 Intro detection at', currentTime.toFixed(1), 's:', {
+        subtitle: evidence.subtitle ? '✅' : '❌',
+        volume: evidence.volume ? '❌' : '❌',
+        scene: evidence.scene ? '❌' : '❌',
+        metadata: evidence.metadata ? '❌' : '❌',
+        total: foundCount
+      });
+      
+      if (foundCount === 0) {
+        console.log('[Skipper] 💡 TIP: For Viki, you can manually set intro times in the popup if auto-detection fails');
+      }
+    }
+    
+    // Combine evidence - need at least 2 independent confirmations OR 1 high-confidence source
+    const detections = [];
+    
+    if (evidence.subtitle) {
+      detections.push({
+        source: 'subtitle',
+        start: evidence.subtitle.introStart,
+        end: evidence.subtitle.introEnd,
+        confidence: evidence.subtitle.confidence
+      });
+    }
+    
+    if (evidence.volume) {
+      detections.push({
+        source: 'volume',
+        start: evidence.volume.introStart,
+        end: evidence.volume.introEnd,
+        confidence: evidence.volume.confidence
+      });
+    }
+    
+    if (evidence.scene) {
+      detections.push({
+        source: 'scene',
+        start: evidence.scene.introStart,
+        end: evidence.scene.introEnd,
+        confidence: evidence.scene.confidence
+      });
+    }
+    
+    if (evidence.metadata) {
+      detections.push({
+        source: 'metadata',
+        start: evidence.metadata.introStart,
+        end: evidence.metadata.introEnd,
+        confidence: 1.0 // Metadata is most reliable
+      });
+    }
+    
+    // If we have metadata markers (chapters, etc.), trust them completely
+    if (evidence.metadata) {
+      console.log('[Skipper] 🎯 Using metadata-based intro detection');
+      return { start: evidence.metadata.introStart, end: evidence.metadata.introEnd };
+    }
+    
+    // Need at least 2 sources agreeing (within 5 seconds tolerance)
+    if (detections.length >= 2) {
+      for (let i = 0; i < detections.length; i++) {
+        for (let j = i + 1; j < detections.length; j++) {
+          const d1 = detections[i];
+          const d2 = detections[j];
+          
+          // Check if both sources agree on intro timing (±5 seconds)
+          if (Math.abs(d1.start - d2.start) <= 5 && Math.abs(d1.end - d2.end) <= 5) {
+            const avgStart = (d1.start + d2.start) / 2;
+            const avgEnd = (d1.end + d2.end) / 2;
+            
+            console.log('[Skipper] 🎯 Multi-source intro confirmed:', {
+              sources: [d1.source, d2.source],
+              start: avgStart.toFixed(1),
+              end: avgEnd.toFixed(1),
+              duration: (avgEnd - avgStart).toFixed(1)
+            });
+            
+            return { start: avgStart, end: avgEnd };
+          }
+        }
+      }
+    }
+    
+    // RELAXED: Single source with high confidence (≥0.8) - was 0.9
+    const highConfidence = detections.find(d => d.confidence >= 0.8);
+    if (highConfidence) {
+      console.log('[Skipper] 🎯 High-confidence intro detected:', highConfidence);
+      return { start: highConfidence.start, end: highConfidence.end };
+    }
+    
+    // FALLBACK: If we have subtitle detection with reasonable confidence (≥0.6), use it
+    if (evidence.subtitle && evidence.subtitle.confidence >= 0.6) {
+      console.log('[Skipper] 🎯 Using subtitle-only detection (confidence:', evidence.subtitle.confidence.toFixed(2), ')');
+      return { start: evidence.subtitle.introStart, end: evidence.subtitle.introEnd };
+    }
+    
+    // No reliable detection yet - keep checking
+    return null;
+  }
+
+  /** Try to detect intro by analyzing subtitle track patterns - DATA ONLY */
+  detectSubtitlePattern(video) {
+    try {
+      // Check for text tracks (subtitles)
+      const tracks = Array.from(video.textTracks || []);
+      
+      // Only log once (first attempt)
+      if (!this._subtitleDebugLogged) {
+        console.log('[Skipper] 🔍 Subtitle Debug:', {
+          totalTracks: tracks.length,
+          trackModes: tracks.map(t => ({ kind: t.kind, mode: t.mode, label: t.label }))
+        });
+        this._subtitleDebugLogged = true;
+      }
+      
+      // Try to find ANY subtitle track (not just showing/hidden)
+      let activeTrack = tracks.find(t => t.mode === 'showing');
+      if (!activeTrack) activeTrack = tracks.find(t => t.mode === 'hidden');
+      if (!activeTrack) activeTrack = tracks.find(t => t.kind === 'subtitles' || t.kind === 'captions');
+      
+      if (!activeTrack) {
+        if (!this._subtitleDebugLogged) {
+          console.log('[Skipper] ❌ No subtitle track found');
+        }
+        return null;
+      }
+      
+      console.log('[Skipper] 📝 Found subtitle track:', {
+        kind: activeTrack.kind,
+        mode: activeTrack.mode,
+        cues: activeTrack.cues?.length || 0
+      });
+      
+      if (!activeTrack.cues) {
+        console.log('[Skipper] ❌ No cues available yet');
+        return null;
+      }
+      
+      const cues = Array.from(activeTrack.cues);
+      if (cues.length < 5) {
+        console.log('[Skipper] ⚠️ Not enough cues yet:', cues.length);
+        return null; // Need enough data
+      }
+      
+      // Find ALL gaps in subtitles (intros typically have long periods without dialogue)
+      const gaps = [];
+      for (let i = 0; i < cues.length - 1; i++) {
+        const currentCue = cues[i];
+        const nextCue = cues[i + 1];
+        
+        const gapDuration = nextCue.startTime - currentCue.endTime;
+        
+        // Only consider significant gaps (20+ seconds)
+        if (gapDuration >= 20) {
+          gaps.push({
+            start: currentCue.endTime,
+            end: nextCue.startTime,
+            duration: gapDuration,
+            position: currentCue.endTime
+          });
+        }
+      }
+      
+      console.log('[Skipper] 📊 Found gaps:', gaps.length, gaps.slice(0, 3));
+      
+      if (gaps.length === 0) return null;
+      
+      // Find the longest gap in the first 3 minutes (most likely the intro)
+      const earlyGaps = gaps.filter(g => g.position < 180);
+      if (earlyGaps.length === 0) return null;
+      
+      // Sort by duration (longest first)
+      earlyGaps.sort((a, b) => b.duration - a.duration);
+      
+      const longestGap = earlyGaps[0];
+      
+      // Validate: Gap should start within first 2 minutes and be substantial
+      if (longestGap.position <= 120 && longestGap.duration >= 25) {
+        // Calculate confidence based on gap duration and position
+        const confidence = Math.min(0.95, longestGap.duration / 90);
+        
+        console.log('[Skipper] ✅ Intro detected via subtitles:', {
+          start: longestGap.start.toFixed(1),
+          end: longestGap.end.toFixed(1),
+          duration: longestGap.duration.toFixed(1),
+          confidence: confidence.toFixed(2)
+        });
+        
+        return { 
+          introStart: longestGap.start, 
+          introEnd: longestGap.end,
+          confidence: confidence
+        };
+      } else {
+        console.log('[Skipper] ⚠️ Gap found but invalid:', {
+          position: longestGap.position.toFixed(1),
+          duration: longestGap.duration.toFixed(1),
+          positionOK: longestGap.position <= 120,
+          durationOK: longestGap.duration >= 25
+        });
+      }
+    } catch (error) {
+      console.error('[Skipper] ❌ Subtitle analysis error:', error);
+    }
+    
+    return null;
+  }
+
+  /** Detect intro by analyzing volume levels (intro music is often louder/distinct) */
+  detectVolumePattern(video) {
+    try {
+      // Check if we can access audio context
+      if (!window.AudioContext && !window.webkitAudioContext) return null;
+      
+      // This would require Web Audio API integration
+      // For now, we check if video has multiple audio tracks with metadata
+      const audioTracks = video.audioTracks;
+      if (!audioTracks || audioTracks.length === 0) return null;
+      
+      // Check for volume metadata in tracks (some platforms provide this)
+      // This is a placeholder for future enhancement
+      return null;
+      
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /** Detect scene changes (intro often has distinct visual patterns) */
+  detectSceneChange(video) {
+    try {
+      // Method 1: Check seekable ranges for chapter markers
+      const seekable = video.seekable;
+      if (seekable && seekable.length > 0) {
+        for (let i = 0; i < seekable.length; i++) {
+          const start = seekable.start(i);
+          const end = seekable.end(i);
+          
+          // Look for chapter-like segments in intro range
+          if (start > 5 && start < 120 && (end - start) > 20 && (end - start) < 120) {
+            return {
+              introStart: start,
+              introEnd: end,
+              confidence: 0.7
+            };
+          }
+        }
+      }
+      
+      // Method 2: Sample video frames to detect visual transitions
+      // This is more CPU-intensive but works without subtitles
+      if (video.readyState >= 2 && video.duration > 60) {
+        return this.analyzeVideoFrames(video);
+      }
+      
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /** Analyze video frames to detect intro by visual changes */
+  analyzeVideoFrames(video) {
+    try {
+      // Create a canvas to sample video frames
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = 160;  // Low resolution for speed
+      canvas.height = 90;
+      
+      // We'll track frame similarity - intro often has consistent visuals
+      // then a sharp change when the show starts
+      const frameSamples = [];
+      const sampleTimes = [];
+      
+      // Sample every 5 seconds for the first 2 minutes
+      for (let t = 0; t < Math.min(120, video.duration); t += 5) {
+        sampleTimes.push(t);
+      }
+      
+      // Store current time to restore later
+      const originalTime = video.currentTime;
+      let samplesCollected = 0;
+      
+      // This would need to be async and run over time
+      // For now, we'll return null and implement this as a background task
+      // in setupTimeBasedSkipping
+      
+      return null;
+      
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /** Start real-time frame analysis to detect visual changes (intro detection) */
+  startFrameAnalysis(video) {
+    try {
+      console.log('[Skipper] 🎥 Starting frame analysis...', {
+        readyState: video.readyState,
+        duration: video.duration,
+        currentTime: video.currentTime
+      });
+      
+      if (!video || video.readyState < 2) {
+        console.log('[Skipper] ⚠️ Video not ready yet, will retry...');
+        // Retry when video is ready
+        video.addEventListener('loadeddata', () => {
+          console.log('[Skipper] ✅ Video ready, starting frame analysis');
+          this.startFrameAnalysis(video);
+        }, { once: true });
+        return;
+      }
+      
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      
+      if (!ctx) {
+        console.error('[Skipper] ❌ Could not get canvas context');
+        return;
+      }
+      
+      canvas.width = 64;  // Very low res for performance
+      canvas.height = 36;
+      
+      console.log('[Skipper] ✅ Canvas created:', canvas.width, 'x', canvas.height);
+      
+      let lastBrightness = null;
+      let lastChange = 0;
+      let stableFrames = 0;
+      let potentialIntroStart = null;
+      let potentialIntroEnd = null;
+      
+      // Sample frames every 2 seconds
+      const sampleFrame = () => {
+        // Don't stop if paused, only if video ended or past 3 minutes
+        if (!video || video.ended || video.currentTime > 180) {
+          console.log('[Skipper] 🛑 Stopping frame analysis:', {
+            ended: video?.ended,
+            currentTime: video?.currentTime
+          });
+          return;
+        }
+        
+        try {
+          // Draw current frame
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          
+          // Calculate average brightness
+          let totalBrightness = 0;
+          for (let i = 0; i < imageData.data.length; i += 4) {
+            const r = imageData.data[i];
+            const g = imageData.data[i + 1];
+            const b = imageData.data[i + 2];
+            totalBrightness += (r + g + b) / 3;
+          }
+          const avgBrightness = totalBrightness / (canvas.width * canvas.height);
+          
+          // Detect significant brightness changes (scene changes)
+          if (lastBrightness !== null) {
+            const change = Math.abs(avgBrightness - lastBrightness);
+            const currentTime = video.currentTime;
+            
+            console.log('[Skipper] 🎨 Frame analysis:', {
+              time: currentTime.toFixed(1),
+              brightness: avgBrightness.toFixed(1),
+              change: change.toFixed(1)
+            });
+            
+            // Large change = scene transition
+            if (change > 30) {
+              console.log('[Skipper] 📸 Scene change detected at', currentTime.toFixed(1), 's');
+              
+              // First major change in first 30 seconds = likely intro start
+              if (!potentialIntroStart && currentTime < 30) {
+                potentialIntroStart = Math.max(0, currentTime - 2);
+                console.log('[Skipper] 🎬 Potential intro START:', potentialIntroStart.toFixed(1));
+              }
+              // Major change after intro start = likely intro end
+              else if (potentialIntroStart && !potentialIntroEnd && currentTime > potentialIntroStart + 20) {
+                potentialIntroEnd = currentTime;
+                console.log('[Skipper] 🎬 Potential intro END:', potentialIntroEnd.toFixed(1));
+                
+                // Cache this detection
+                if (potentialIntroEnd - potentialIntroStart >= 30 && potentialIntroEnd - potentialIntroStart <= 120) {
+                  this.introDetectionCache = {
+                    start: potentialIntroStart,
+                    end: potentialIntroEnd
+                  };
+                  console.log('[Skipper] ✅ Visual intro detection cached:', this.introDetectionCache);
+                }
+              }
+              
+              lastChange = currentTime;
+              stableFrames = 0;
+            } else {
+              stableFrames++;
+            }
+          }
+          
+          lastBrightness = avgBrightness;
+          
+        } catch (e) {
+          console.error('[Skipper] ❌ Frame analysis error:', e);
+        }
+      };
+      
+      // Sample immediately
+      setTimeout(sampleFrame, 100);
+      
+      // Then sample every 2 seconds
+      this.videoFrameAnalyzer = setInterval(sampleFrame, 2000);
+      
+      console.log('[Skipper] ✅ Frame analyzer started (interval every 2s)');
+      
+      // Also stop after 3 minutes
+      setTimeout(() => {
+        if (this.videoFrameAnalyzer) {
+          clearInterval(this.videoFrameAnalyzer);
+          this.videoFrameAnalyzer = null;
+          console.log('[Skipper] 🛑 Frame analysis stopped (3 min limit)');
+        }
+      }, 180000);
+      
+    } catch (error) {
+      console.error('[Skipper] ❌ Could not start frame analysis:', error);
+    }
+  }
+
+  /** Check for metadata markers (chapters, TextTrack metadata) */
+  detectMetadataMarkers(video) {
+    try {
+      // Check for metadata tracks (some platforms use these for chapters)
+      const tracks = Array.from(video.textTracks || []);
+      const metadataTrack = tracks.find(t => t.kind === 'metadata' || t.kind === 'chapters');
+      
+      // Only log once
+      if (!this._metadataDebugLogged) {
+        console.log('[Skipper] 🔍 Metadata Debug:', {
+          totalTracks: tracks.length,
+          hasMetadata: !!metadataTrack,
+          kinds: tracks.map(t => t.kind)
+        });
+        this._metadataDebugLogged = true;
+      }
+      
+      if (metadataTrack && metadataTrack.cues) {
+        const cues = Array.from(metadataTrack.cues);
+        console.log('[Skipper] 📊 Metadata cues:', cues.length);
+        
+        // Look for intro markers
+        for (const cue of cues) {
+          const text = cue.text?.toLowerCase() || '';
+          
+          // Check for intro-related keywords
+          if (text.includes('intro') || text.includes('opening') || text.includes('op')) {
+            console.log('[Skipper] ✅ Found intro marker in metadata:', text);
+            return {
+              introStart: cue.startTime,
+              introEnd: cue.endTime,
+              confidence: 1.0 // Metadata is most reliable
+            };
+          }
+        }
+      }
+      
+      // Check for chapter metadata in video element attributes
+      if (video.dataset?.chapters) {
+        try {
+          const chapters = JSON.parse(video.dataset.chapters);
+          const introChapter = chapters.find(c => 
+            c.title?.toLowerCase().includes('intro') || 
+            c.title?.toLowerCase().includes('opening')
+          );
+          
+          if (introChapter) {
+            console.log('[Skipper] ✅ Found intro chapter in dataset:', introChapter);
+            return {
+              introStart: introChapter.start,
+              introEnd: introChapter.end,
+              confidence: 1.0
+            };
+          }
+        } catch (e) {
+          // Invalid JSON
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('[Skipper] ❌ Metadata error:', error);
+      return null;
+    }
+  }
+
+  /** Show a temporary notification when auto-skipping */
+  showSkipNotification(message) {
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: bold;
+      z-index: 999999;
+      pointer-events: none;
+      animation: fadeInOut 2s ease-in-out;
+    `;
+    notification.textContent = message;
+    
+    // Add fade animation
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes fadeInOut {
+        0% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+        20% { opacity: 1; transform: translateX(-50%) translateY(0); }
+        80% { opacity: 1; transform: translateX(-50%) translateY(0); }
+        100% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+      }
+    `;
+    document.head.appendChild(style);
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+      notification.remove();
+      style.remove();
+    }, 2000);
   }
 
   /** Save settings to chrome.storage (sync → local fallback) */
@@ -2103,6 +2840,22 @@ class VideoPlayerSkipper {
           const nextHud = this.isHudEnabled();
           if (nextHud && !this.hud) this.ensureHUD();
           if (!nextHud && this.hud) this.destroyHUD();
+        }
+        sendResponse({ success: true });
+        break;
+        
+      case 'clearIntroCache':
+        // Clear cached intro detection so new manual times take effect immediately
+        this.introDetectionCache = null;
+        if (request.manualTimes) {
+          console.log('[Skipper] 🎯 Manual intro times updated:', request.manualTimes);
+          // Cache the manual times immediately
+          this.introDetectionCache = {
+            start: request.manualTimes.start,
+            end: request.manualTimes.end
+          };
+        } else {
+          console.log('[Skipper] 🗑️ Manual intro times cleared');
         }
         sendResponse({ success: true });
         break;

@@ -780,6 +780,47 @@
               <span class="option-text">Auto Next</span>
             </div>
           </div>
+          
+          <!-- Manual Intro Times (for platforms like Viki) -->
+          <div class="manual-intro-section" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1);">
+            <div class="manual-intro-header" style="display: flex; align-items: center; margin-bottom: 12px;">
+              <svg style="width: 16px; height: 16px; margin-right: 8px; opacity: 0.8;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="12 6 12 12 16 14"/>
+              </svg>
+              <span style="font-size: 13px; font-weight: 500; opacity: 0.9;">Manuelle Intro-Zeiten (Optional)</span>
+            </div>
+            <div style="font-size: 11px; opacity: 0.6; margin-bottom: 10px;">
+              Für Plattformen ohne Auto-Erkennung (z.B. Viki.com)
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <div style="display: flex; flex-direction: column;">
+                <label style="font-size: 11px; opacity: 0.7; margin-bottom: 4px;">Start (Sekunden)</label>
+                <input type="number" id="manualIntroStart" min="0" max="300" placeholder="z.B. 15"
+                  style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; padding: 8px 10px; color: #fff; font-size: 13px; width: 100%;">
+              </div>
+              <div style="display: flex; flex-direction: column;">
+                <label style="font-size: 11px; opacity: 0.7; margin-bottom: 4px;">Ende (Sekunden)</label>
+                <input type="number" id="manualIntroEnd" min="0" max="300" placeholder="z.B. 75"
+                  style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; padding: 8px 10px; color: #fff; font-size: 13px; width: 100%;">
+              </div>
+            </div>
+            
+            <button id="saveManualIntro" 
+              style="margin-top: 10px; width: 100%; background: rgba(59, 130, 246, 0.3); border: 1px solid rgba(59, 130, 246, 0.5); border-radius: 6px; padding: 8px; color: #fff; font-size: 12px; cursor: pointer; transition: all 0.2s;"
+              onmouseover="this.style.background='rgba(59, 130, 246, 0.5)'"
+              onmouseout="this.style.background='rgba(59, 130, 246, 0.3)'">
+              💾 Intro-Zeiten speichern
+            </button>
+            
+            <button id="clearManualIntro"
+              style="margin-top: 6px; width: 100%; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 6px; padding: 8px; color: #fff; font-size: 12px; cursor: pointer; transition: all 0.2s;"
+              onmouseover="this.style.background='rgba(239, 68, 68, 0.4)'"
+              onmouseout="this.style.background='rgba(239, 68, 68, 0.2)'">
+              🗑️ Intro-Zeiten löschen
+            </button>
+          </div>
         </div>
       </div>
       

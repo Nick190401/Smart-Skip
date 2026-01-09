@@ -61,7 +61,8 @@
     "*://*.prosieben.de/*",
     "*://*.zdf.de/*",
     "*://*.ard.de/*",
-    "*://*.mediathek.de/*"
+    "*://*.mediathek.de/*",
+    "*://*.viki.com/*"
   ],
   
   "content_scripts": [
@@ -106,7 +107,8 @@
         "*://*.prosieben.de/*",
         "*://*.zdf.de/*",
         "*://*.ard.de/*",
-        "*://*.mediathek.de/*"
+        "*://*.mediathek.de/*",
+        "*://*.viki.com/*"
       ],
       "js": [
         "src/shared/language.js",

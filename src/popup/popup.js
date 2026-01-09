@@ -350,6 +350,7 @@ class PopupManager {
         'zdf.',
         'ard.',
         'mediathek.',
+        'viki.com',
         'twitch.tv',
         'vimeo.com',
         'dailymotion.com'
@@ -552,6 +553,74 @@ class PopupManager {
       enableDomainBtn.dataset.bound = 'true';
     }
 
+    // Manual Intro Times
+    const saveManualIntroBtn = document.getElementById('saveManualIntro');
+    if (saveManualIntroBtn && !saveManualIntroBtn.dataset.bound) {
+      saveManualIntroBtn.addEventListener('click', async () => {
+        try {
+          const startInput = document.getElementById('manualIntroStart');
+          const endInput = document.getElementById('manualIntroEnd');
+          
+          const start = parseFloat(startInput.value);
+          const end = parseFloat(endInput.value);
+          
+          if (isNaN(start) || isNaN(end)) {
+            this.showStatus('❌ Bitte gültige Zahlen eingeben', 'error');
+            return;
+          }
+          
+          if (start >= end) {
+            this.showStatus('❌ Start muss kleiner als Ende sein', 'error');
+            return;
+          }
+          
+          if (start < 0 || end > 300) {
+            this.showStatus('❌ Zeiten müssen zwischen 0 und 300 Sekunden sein', 'error');
+            return;
+          }
+          
+          // Save to current series settings
+          this.updateSeriesSetting('manualIntroTimes', { start, end });
+          this.showStatus(`✅ Intro-Zeiten gespeichert: ${start}s - ${end}s`, 'success');
+          
+          // Notify content script to clear cache and use new times
+          await this.sendMessageToActiveTabSafe({ 
+            action: 'clearIntroCache',
+            manualTimes: { start, end }
+          });
+          
+        } catch (e) {
+          this.showStatus('❌ Speichern fehlgeschlagen', 'error');
+        }
+      });
+      saveManualIntroBtn.dataset.bound = 'true';
+    }
+    
+    const clearManualIntroBtn = document.getElementById('clearManualIntro');
+    if (clearManualIntroBtn && !clearManualIntroBtn.dataset.bound) {
+      clearManualIntroBtn.addEventListener('click', async () => {
+        try {
+          // Clear manual intro times
+          this.updateSeriesSetting('manualIntroTimes', null);
+          
+          // Clear input fields
+          document.getElementById('manualIntroStart').value = '';
+          document.getElementById('manualIntroEnd').value = '';
+          
+          this.showStatus('🗑️ Intro-Zeiten gelöscht', 'success');
+          
+          // Notify content script
+          await this.sendMessageToActiveTabSafe({ 
+            action: 'clearIntroCache'
+          });
+          
+        } catch (e) {
+          this.showStatus('❌ Löschen fehlgeschlagen', 'error');
+        }
+      });
+      clearManualIntroBtn.dataset.bound = 'true';
+    }
+
     const reportSiteBtn = document.getElementById('reportSiteBtn');
     if (reportSiteBtn && !reportSiteBtn.dataset.bound) {
       reportSiteBtn.addEventListener('click', async () => {
@@ -725,6 +794,19 @@ class PopupManager {
         }
       }
     });
+    
+    // Update manual intro times fields
+    const manualIntroStart = document.getElementById('manualIntroStart');
+    const manualIntroEnd = document.getElementById('manualIntroEnd');
+    if (manualIntroStart && manualIntroEnd) {
+      if (seriesSettings.manualIntroTimes) {
+        manualIntroStart.value = seriesSettings.manualIntroTimes.start || '';
+        manualIntroEnd.value = seriesSettings.manualIntroTimes.end || '';
+      } else {
+        manualIntroStart.value = '';
+        manualIntroEnd.value = '';
+      }
+    }
   }
 
   // Poll for series updates periodically; light-weight in popup context

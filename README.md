@@ -107,7 +107,7 @@
 | 🔴 **Netflix** (all regions) | 🍥 **Crunchyroll** | 📺 **Sky** | 🎮 **Twitch** |
 | 🏰 **Disney+** | 🎭 **Funimation** | 📻 **Joyn** | 📹 **Vimeo** |
 | 📦 **Amazon Prime** (global) | 🌸 **Wakanim** | 📡 **RTL+** | 🎞️ **Dailymotion** |
-| 🍎 **Apple TV+** | | 📺 **ProSieben** | |
+| 🍎 **Apple TV+** | 🌏 **Viki** (auto-skip) | 📺 **ProSieben** | |
 | 📺 **HBO Max / Max** | | 🏛️ **ZDF** | |
 | 🌊 **Hulu** | | 🏛️ **ARD** | |
 | ⛰️ **Paramount+** | | 📚 **Mediathek** | |
@@ -825,11 +825,11 @@ This project is licensed under a custom License - see the [LICENSE](LICENSE) fil
 <tr>
 <td width="20%">
 
-#### 🏷️ **v1.1.8**
+#### 🏷️ **v1.2.2**
 > *Current Version*
 
-🗓️ **Released:** November 2025  
-🎯 **Focus:** Prime Video Compatibility Fix
+🗓️ **Released:** December 2025  
+🎯 **Focus:** Viki.com Support & Auto-Skip
 
 </td>
 <td width="80%">
@@ -846,8 +846,8 @@ This project is licensed under a custom License - see the [LICENSE](LICENSE) fil
 
 ### 📈 **Development Timeline**
 
-<details open>
-<summary><strong>🎉 Version 1.2.0 - International Edition (Current)</strong></summary>
+<details>
+<summary><strong>🎉 Version 1.2.0 - International Edition</strong></summary>
 
 **🌍 Major Features:**
 - 🗣️ **Enhanced Multi-Language Support** → Comprehensive button detection in 12 languages:
