@@ -1,0 +1,8 @@
+# Deny all direct HTTP access to uploaded files.
+# Attachments are served exclusively via auth.php (getAttachment route).
+Options -Indexes -ExecCGI
+AddHandler cgi-script .php .php5 .phtml .pl .py .rb .cgi
+<FilesMatch ".">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
