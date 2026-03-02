@@ -5,8 +5,22 @@
 
 Options -Indexes
 
+# ── PHP upload limits (shared hosting — Hostinger) ────────────────────────────
+# Raises the default 2 MB cap to 6 MB so 5 MB attachments fit with multipart overhead.
+<IfModule mod_php.c>
+    php_value upload_max_filesize 6M
+    php_value post_max_size       7M
+    php_value max_file_uploads    5
+</IfModule>
+# For PHP-FPM (Hostinger default since ~2023) these are set via .user.ini instead:
+
 # ── PHP security ──────────────────────────────────────────────────────────────
 <Files "config.php">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files ".user.ini">
     Order Allow,Deny
     Deny from all
 </Files>
