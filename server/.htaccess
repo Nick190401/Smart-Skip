@@ -1,0 +1,29 @@
+# Smart Skip v2 — merged into site/public/.htaccess for deployment.
+# This file is kept as the source-of-truth reference for the server config.
+# Deploy site/public/.htaccess to public_html/ — it covers both SPA routing
+# and PHP security in one place.
+
+Options -Indexes
+
+# ── PHP security ──────────────────────────────────────────────────────────────
+<Files "config.php">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<FilesMatch "^(?!api\.php|auth\.php|privacy\.php).*\.php$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# ── SPA routing ───────────────────────────────────────────────────────────────
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} !^/api\.php
+    RewriteCond %{REQUEST_URI} !^/auth\.php
+    RewriteCond %{REQUEST_URI} !^/privacy\.php
+    RewriteRule ^ /index.html [L]
+</IfModule>

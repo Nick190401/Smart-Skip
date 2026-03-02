@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=420">
+<title>Smart Skip</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --accent:      #4f8ef7;
+  --accent-dim:  rgba(79,142,247,.13);
+  --green:       #34d399;
+  --green-dim:   rgba(52,211,153,.12);
+  --amber:       #fbbf24;
+  --text:        #f0f0fa;
+  --text2:       #8585aa;
+  --muted:       #4d4d6a;
+  --card:        rgba(255,255,255,.04);
+  --card-border: rgba(255,255,255,.07);
+  --radius-sm:   8px;
+  --radius:      12px;
+  --radius-lg:   16px;
+}
+
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 3px; }
+
+body {
+  width: 380px;
+  min-height: 100px;
+  background: radial-gradient(ellipse 65% 35% at 50% -5%, rgba(79,100,220,.11) 0%, transparent 55%), #0b0b17;
+  color: var(--text);
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  padding-bottom: 20px;
+}
+
+/* ── Header ────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 14px 12px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  position: sticky; top: 0; z-index: 10;
+  background: rgba(11,11,23,.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+.logo {
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  overflow: hidden; flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.09), 0 2px 8px rgba(0,0,0,.4);
+}
+.logo img { width: 36px; height: 36px; display: block; }
+.header-text { flex: 1; min-width: 0; }
+.header-text h1 { font-size: 13.5px; font-weight: 700; letter-spacing: -.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.header-text p  { font-size: 10.5px; color: var(--muted); margin-top: 1px; }
+
+/* Status chip */
+.status-dot {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 100px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.08);
+  font-size: 10.5px; font-weight: 600;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: color .25s, border-color .25s, background .25s;
+  white-space: nowrap;
+}
+.status-dot::before {
+  content: '';
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+  transition: background .25s, box-shadow .25s;
+}
+.status-dot::after { content: attr(data-label); }
+.status-dot.ready { color: var(--green); border-color: rgba(52,211,153,.22); background: rgba(52,211,153,.07); }
+.status-dot.ready::before { background: var(--green); box-shadow: 0 0 6px rgba(52,211,153,.7); }
+.status-dot.rule  { color: var(--accent); border-color: rgba(79,142,247,.22); background: rgba(79,142,247,.07); }
+.status-dot.rule::before  { background: var(--accent); box-shadow: 0 0 6px rgba(79,142,247,.7); }
+.status-dot.off::after { content: attr(data-label); }
+
+#ai-badge { display: none; }
+
+/* ── Page gutter ───────────────────────────────────────── */
+main { padding: 0 14px; }
+
+/* ── Series card ──────────────────────────────────────── */
+.series-card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  border-left: 3px solid transparent;
+  padding: 11px 13px 11px 14px;
+  transition: border-left-color .25s;
+}
+.series-card:not(.empty) { border-left-color: var(--accent); }
+.series-card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 6px;
+}
+.series-card .label {
+  font-size: 10px; font-weight: 600; letter-spacing: .4px;
+  text-transform: uppercase; color: var(--muted);
+}
+.series-card:not(.empty) .label { color: var(--accent); }
+.series-card .title {
+  font-size: 14px; font-weight: 650; letter-spacing: -.15px;
+  line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.series-card .episode { font-size: 11px; color: var(--text2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.series-card.empty .title { color: var(--muted); font-weight: 400; font-style: italic; }
+
+/* ── Stats bar ─────────────────────────────────────────── */
+.stats-bar { display: flex; gap: 7px; margin-top: 7px; }
+.stats-pill {
+  flex: 1; display: flex; align-items: center; gap: 9px;
+  padding: 9px 11px;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+}
+.stats-pill-icon {
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; width: 28px; height: 28px;
+  border-radius: 8px;
+  background: rgba(79,142,247,.10); color: var(--accent);
+}
+.stats-bar .stats-pill:nth-child(2) .stats-pill-icon { background: rgba(52,211,153,.09); color: var(--green); }
+.stats-bar .stats-pill:nth-child(3) .stats-pill-icon { background: rgba(251,191,36,.09); color: var(--amber); }
+.stats-pill-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.stats-value { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); line-height: 1; }
+.stats-label { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Header icon buttons ─────────────────────────────── */
+.btn-header-icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.04);
+  color: var(--muted);
+  cursor: pointer; flex-shrink: 0; text-decoration: none;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.btn-header-icon:hover { background: var(--accent-dim); color: var(--accent); border-color: rgba(79,142,247,.22); }
+.btn-header-icon.spinning svg { animation: spin .5s linear; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Scan-now button (inline in series card header) ───── */
+.btn-scan-now {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 10px; border-radius: 100px;
+  border: 1px solid rgba(79,142,247,.25);
+  background: rgba(79,142,247,.07);
+  color: var(--accent); font-size: 10px; font-weight: 600;
+  cursor: pointer; transition: background .15s, border-color .15s;
+  white-space: nowrap;
+}
+.btn-scan-now:hover { background: rgba(79,142,247,.16); border-color: rgba(79,142,247,.45); }
+
+/* ── Snooze pills ─────────────────────────────────────── */
+.snooze-pills { display: flex; gap: 5px; flex-shrink: 0; }
+.btn-snooze {
+  padding: 4px 10px; border-radius: 100px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.05); color: var(--text2);
+  font-size: 11px; font-weight: 500; cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s; white-space: nowrap;
+}
+.btn-snooze:hover { background: var(--accent-dim); border-color: rgba(79,142,247,.28); color: var(--text); }
+.btn-snooze.active { background: rgba(251,191,36,.12); border-color: rgba(251,191,36,.32); color: var(--amber); }
+.btn-snooze[data-minutes="0"] { padding: 4px 8px; color: var(--muted); }
+.btn-snooze[data-minutes="0"]:hover { color: #f87171; border-color: rgba(248,113,113,.32); background: rgba(248,113,113,.08); }
+.btn-snooze[data-minutes="0"].active { background: rgba(248,113,113,.1); border-color: rgba(248,113,113,.38); color: #f87171; }
+
+/* ── Broadcast banner ─────────────────────────────────── */
+#broadcast-banner {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 14px 0;
+}
+.bc-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255,255,255,.08);
+  border-left-width: 3px;
+}
+.bc-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 2px; }
+.bc-body { flex: 1; min-width: 0; }
+.bc-title { font-size: 11.5px; font-weight: 700; line-height: 1.3; margin-bottom: 2px; }
+.bc-text  { font-size: 11px; color: var(--text2); line-height: 1.5; word-break: break-word; }
+.bc-link {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-top: 5px; padding: 2px 8px;
+  border-radius: 5px; font-size: 9.5px; font-weight: 600;
+  text-decoration: none; border: 1px solid currentColor; opacity: .85;
+  transition: opacity .15s;
+}
+.bc-link:hover { opacity: 1; }
+.bc-dismiss {
+  display: inline-flex; align-items: center; gap: 3px;
+  margin-top: 4px; padding: 0; background: none; border: none;
+  color: var(--muted); font-size: 9.5px; cursor: pointer;
+  font-family: inherit; transition: color .15s;
+}
+.bc-dismiss:hover { color: var(--text2); }
+
+/* ── Announcement bar ─────────────────────────── */
+#announcement-bar {
+  display: none;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 10px 14px 0;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.08);
+}
+#announcement-bar svg { flex-shrink: 0; margin-top: 1px; color: var(--text2); }
+#announcement-bar span { font-size: 11px; color: var(--text2); line-height: 1.5; }
+
+/* ── Maintenance banner (graceful) ────────────── */
+#maintenance-banner {
+  display: none;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 10px 14px 0;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  background: rgba(251,191,36,.05);
+  border: 1px solid rgba(251,191,36,.22);
+}
+#maintenance-banner svg { flex-shrink: 0; margin-top: 1px; color: var(--amber); }
+#maintenance-banner .maint-msg { font-size: 11px; color: var(--amber); line-height: 1.5; }
+#maintenance-banner .maint-time { font-size: 10px; color: #d4a017; margin-top: 3px; }
+
+/* ── Quick-Actions bar ────────────────────────── */
+#quick-actions-bar {
+  display: none;
+  gap: 6px;
+  margin: 10px 14px 0;
+}
+#quick-actions-bar a {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-dim);
+  border: 1px solid rgba(79,142,247,.18);
+  color: var(--text2);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background .15s, border-color .15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#quick-actions-bar a:hover {
+  background: rgba(79,142,247,.18);
+  border-color: rgba(79,142,247,.35);
+}
+#quick-actions-bar .qa-icon {
+  font-size: 13px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* ── Version-Gate Banner ───────────────────── */
+#version-gate {
+  display: none;
+  flex-direction: column;
+  margin: 10px 14px 0;
+  border-radius: var(--radius);
+  border: 1px solid rgba(251,191,36,.25);
+  background: rgba(251,191,36,.05);
+  overflow: hidden;
+}
+#version-gate-head {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 12px; cursor: pointer; user-select: none;
+}
+#version-gate-head svg { flex-shrink: 0; color: var(--amber); }
+#version-gate-title {
+  flex: 1; font-size: 11.5px; font-weight: 700; color: var(--amber);
+}
+#version-gate-chevron { color: var(--muted); transition: transform .2s; }
+#version-gate.open #version-gate-chevron { transform: rotate(180deg); }
+#version-gate-body {
+  display: none; padding: 0 12px 10px;
+  border-top: 1px solid rgba(251,191,36,.12);
+}
+#version-gate.open #version-gate-body { display: block; }
+#version-gate-changelog {
+  font-size: 10.5px; color: var(--text2); line-height: 1.6;
+  margin-top: 8px; white-space: pre-wrap;
+}
+
+/* ── version-blocked mode: hide all UI, show only gate ── */
+body.version-blocked #ai-banner,
+body.version-blocked #announcement-bar,
+body.version-blocked #broadcast-banner,
+body.version-blocked #maintenance-banner,
+body.version-blocked #quick-actions-bar,
+body.version-blocked main,
+body.version-blocked .header .status-dot { display: none !important; }
+
+body.version-blocked #version-gate {
+  margin: 16px 14px;
+  border-color: rgba(251,191,36,.4);
+  background: rgba(251,191,36,.07);
+}
+body.version-blocked #version-gate-head {
+  padding: 14px 14px 12px;
+  gap: 11px;
+}
+body.version-blocked #version-gate-head svg {
+  width: 18px; height: 18px;
+}
+body.version-blocked #version-gate-title {
+  font-size: 13.5px; font-weight: 700;
+  letter-spacing: -.1px;
+}
+#version-gate-sub {
+  font-size: 11px; color: var(--muted); font-weight: 400; margin-top: 1px;
+}
+#version-gate-cws {
+  display: none;
+  align-items: center; justify-content: center;
+  margin: 0 14px 14px;
+  padding: 9px;
+  border-radius: var(--radius);
+  background: rgba(251,191,36,.1);
+  border: 1px solid rgba(251,191,36,.25);
+  color: var(--amber); font-size: 12px; font-weight: 600;
+  text-decoration: none; gap: 7px;
+  transition: background .15s, border-color .15s;
+}
+#version-gate-cws:hover { background: rgba(251,191,36,.18); border-color: rgba(251,191,36,.45); }
+body.version-blocked #version-gate-cws { display: flex; }
+
+/* ── AI setup banner ──────────────────────────────────── */
+#ai-banner {
+  display: none; margin: 12px 14px 0;
+  border-radius: var(--radius);
+  border: 1px solid rgba(251,191,36,.18);
+  background: rgba(251,191,36,.04);
+  overflow: hidden;
+}
+.ai-banner-head { display: flex; align-items: center; gap: 9px; padding: 10px 13px; cursor: pointer; user-select: none; }
+.ai-banner-icon { font-size: 13px; flex-shrink: 0; line-height: 1; }
+.ai-banner-title { flex: 1; font-size: 12px; font-weight: 600; color: var(--amber); }
+.ai-banner-sub { font-size: 10.5px; color: var(--muted); font-weight: 400; }
+.ai-banner-chevron { color: var(--muted); transition: transform .2s; flex-shrink: 0; }
+#ai-banner.open .ai-banner-chevron { transform: rotate(180deg); }
+.ai-banner-body { display: none; padding: 0 13px 12px; border-top: 1px solid rgba(251,191,36,.09); }
+#ai-banner.open .ai-banner-body { display: block; }
+.ai-banner-note { font-size: 11px; color: var(--text2); margin: 9px 0 10px; line-height: 1.55; }
+.ai-steps { display: flex; flex-direction: column; gap: 7px; margin-bottom: 10px; }
+.ai-step { display: flex; align-items: center; gap: 8px; }
+.ai-step-num {
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: rgba(251,191,36,.12); border: 1px solid rgba(251,191,36,.25);
+  color: var(--amber); font-size: 10px; font-weight: 700; flex-shrink: 0;
+}
+.ai-step-url {
+  flex: 1; font-size: 10px; font-family: 'SF Mono', ui-monospace, monospace;
+  color: var(--text2); background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08); border-radius: 6px;
+  padding: 4px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ai-step-copy {
+  flex-shrink: 0; padding: 3px 9px; border-radius: 6px;
+  border: 1px solid rgba(255,255,255,.09); background: rgba(255,255,255,.05);
+  color: var(--muted); font-size: 10px; cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s; white-space: nowrap;
+}
+.ai-step-copy:hover { color: var(--amber); border-color: rgba(251,191,36,.32); background: rgba(251,191,36,.08); }
+.ai-step-copy.copied { color: var(--green); border-color: rgba(52,211,153,.28); background: rgba(52,211,153,.07); }
+.ai-banner-dismiss {
+  display: block; width: 100%; padding: 6px; border: none; background: none;
+  color: var(--muted); font-size: 10.5px; cursor: pointer; text-align: center;
+  border-top: 1px solid rgba(255,255,255,.05); margin-top: 5px; transition: color .15s;
+}
+.ai-banner-dismiss:hover { color: var(--text2); }
+
+/* ── Unsupported site banner ──────────────────────────── */
+#unsupported-banner {
+  display: none; margin: 12px 0 0;
+  border-radius: var(--radius);
+  border: 1px solid rgba(248,113,113,.16);
+  background: rgba(248,113,113,.04);
+  padding: 11px 13px 12px;
+}
+.unsupported-banner-head { display: flex; align-items: center; gap: 9px; }
+.unsupported-banner-icon { color: #f87171; flex-shrink: 0; display: flex; align-items: center; }
+.unsupported-banner-title { flex: 1; font-size: 12px; font-weight: 600; color: #f87171; }
+.unsupported-banner-sub { font-size: 10.5px; color: var(--muted); font-weight: 400; }
+.unsupported-banner-note { font-size: 11px; color: var(--text2); margin: 7px 0 0; line-height: 1.55; }
+body.is-unsupported #heading-now-playing,
+body.is-unsupported #now-playing-wrap,
+body.is-unsupported #snooze-row,
+body.is-unsupported #domain-row,
+body.is-unsupported #btn-reset-domain,
+body.is-unsupported #series-settings-label,
+body.is-unsupported #series-toggle-list,
+body.is-unsupported #episode-section { display: none !important; }
+
+/* ── Section heading ────────────────────────────────── */
+.section-heading {
+  font-size: 10.5px; font-weight: 600; letter-spacing: .1px;
+  color: var(--muted); margin: 18px 0 7px;
+  display: flex; align-items: center; gap: 8px;
+}
+.section-heading::after { content: ''; flex: 1; height: 1px; background: rgba(255,255,255,.06); }
+
+/* ── Toggle list ────────────────────────────────────── */
+.toggle-list {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 13px; gap: 14px;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+  transition: background .12s;
+}
+.toggle-row:last-child { border-bottom: none; }
+.toggle-row:hover { background: rgba(255,255,255,.04); }
+.toggle-row .row-left { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.toggle-row .row-label { font-size: 13px; font-weight: 500; }
+.toggle-row .row-desc  { font-size: 11px; color: var(--muted); }
+
+/* Toggle switch — iOS pill */
+.toggle { position: relative; width: 42px; height: 24px; flex-shrink: 0; }
+.toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.toggle .knob {
+  position: absolute; inset: 0;
+  background: rgba(255,255,255,.1); border-radius: 100px;
+  cursor: pointer; transition: background .2s;
+  border: 1.5px solid rgba(255,255,255,.1);
+}
+.toggle .knob::after {
+  content: ''; position: absolute; left: 3px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; border-radius: 50%;
+  background: rgba(255,255,255,.45);
+  transition: transform .22s cubic-bezier(.34,1.4,.64,1), background .2s;
+  box-shadow: 0 1px 4px rgba(0,0,0,.4);
+}
+.toggle input:checked + .knob { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 10px rgba(79,142,247,.22); }
+.toggle input:checked + .knob::after { transform: translateX(18px) translateY(-50%); background: #fff; }
+
+/* ── Tooltip ─────────────────────────────────────────── */
+#tt {
+  display: none; position: fixed; z-index: 9999;
+  max-width: 210px; padding: 6px 10px;
+  background: rgba(12,12,22,.97);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 8px; box-shadow: 0 8px 28px rgba(0,0,0,.5);
+  color: rgba(200,200,230,.82); font-size: 11px; line-height: 1.5;
+  text-align: center; pointer-events: none; opacity: 0;
+  transform: translateY(3px); transition: opacity .18s, transform .18s;
+}
+#tt.visible { opacity: 1; transform: translateY(0); }
+
+/* ── Episode section ─────────────────────────────────── */
+.ep-inherit-note { font-size: 11px; color: var(--muted); margin: 4px 0 8px; font-style: italic; }
+.ep-label.overridden { color: var(--accent); font-weight: 700; }
+.btn-ep-reset {
+  padding: 3px 10px; background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.09); color: var(--muted);
+  border-radius: var(--radius-sm); font-size: 11px; cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.btn-ep-reset:hover { color: var(--text); border-color: rgba(255,255,255,.22); background: rgba(255,255,255,.1); }
+.last-action { display: none !important; }
+
+/* ── Toast ────────────────────────────────────────────── */
+.toast {
+  position: fixed; bottom: 16px; left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  background: rgba(20,20,34,.92);
+  border: 1px solid rgba(255,255,255,.11);
+  color: var(--text); font-size: 12px; font-weight: 500;
+  padding: 7px 18px; border-radius: 100px; opacity: 0;
+  transition: opacity .2s, transform .2s; pointer-events: none;
+  white-space: nowrap; box-shadow: 0 8px 24px rgba(0,0,0,.5);
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ── Insights ─────────────────────────────────────────── */
+.insights-section {
+  margin: 16px 0 0;
+  background: var(--card); border: 1px solid var(--card-border);
+  border-radius: var(--radius); overflow: hidden;
+}
+.insights-summary {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 14px; cursor: pointer; user-select: none;
+  font-size: 12px; font-weight: 500; color: var(--text2);
+  list-style: none; transition: background .12s;
+}
+.insights-summary::-webkit-details-marker { display: none; }
+.insights-summary:hover { background: rgba(255,255,255,.04); }
+.insights-summary::after { content: '›'; font-size: 16px; color: var(--muted); transition: transform .2s; margin-left: auto; }
+details[open] .insights-summary::after { transform: rotate(90deg); }
+.insights-badge {
+  font-size: 10px; font-weight: 600; color: var(--muted);
+  background: rgba(255,255,255,.07); padding: 2px 7px;
+  border-radius: 100px; margin-left: 8px;
+}
+.insights-body { padding: 0 14px 10px; font-size: 11px; color: var(--text2); line-height: 1.7; border-top: 1px solid rgba(255,255,255,.05); }
+.insights-empty { color: var(--muted); padding: 10px 0 4px; font-style: italic; }
+.btn-insight {
+  margin-top: 10px; padding: 5px 12px;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.09);
+  color: var(--text2); border-radius: var(--radius-sm); font-size: 11px; cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.btn-insight:hover { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.18); }
+
+/* ── Consent overlay ──────────────────────────────────── */
+.consent-overlay {
+  position: fixed; inset: 0; background: rgba(6,6,14,.82);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 9999; padding: 16px;
+}
+.consent-box {
+  background: rgba(16,16,28,.96);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: var(--radius-lg);
+  padding: 24px 20px 20px; width: 100%;
+  box-shadow: 0 24px 64px rgba(0,0,0,.7);
+}
+.consent-icon { font-size: 24px; margin-bottom: 12px; text-align: center; }
+.consent-box h2 { font-size: 15px; font-weight: 700; letter-spacing: -.2px; margin-bottom: 10px; text-align: center; }
+.consent-body { font-size: 12px; color: var(--text2); margin-bottom: 12px; line-height: 1.7; }
+.consent-list { font-size: 11px; color: var(--text2); padding-left: 16px; margin-bottom: 12px; line-height: 2; }
+.consent-note { font-size: 10px; color: var(--muted); font-style: italic; text-align: center; margin-bottom: 18px; }
+.consent-buttons { display: flex; gap: 8px; }
+.btn-consent-yes {
+  flex: 1; padding: 11px; background: var(--accent); color: #fff;
+  border: none; border-radius: var(--radius); font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: filter .15s; box-shadow: 0 4px 18px rgba(79,142,247,.25);
+}
+.btn-consent-yes:hover { filter: brightness(1.1); }
+.btn-consent-no {
+  flex: 1; padding: 11px; background: transparent;
+  border: 1.5px solid rgba(255,255,255,.12); color: var(--text2);
+  border-radius: var(--radius); font-size: 13px; cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.btn-consent-no:hover { color: var(--text); border-color: rgba(255,255,255,.28); }
+.toggle-row.row-locked { opacity: .4; pointer-events: none; }
+.btn-delete-data {
+  flex-shrink: 0; padding: 5px 11px; background: transparent;
+  border: 1px solid rgba(239,68,68,.22); color: #f87171;
+  border-radius: var(--radius-sm); font-size: 11px; font-weight: 600;
+  cursor: pointer; font-family: inherit;
+  transition: background .15s, border-color .15s; white-space: nowrap;
+}
+.btn-delete-data:hover { background: rgba(239,68,68,.08); border-color: rgba(239,68,68,.42); }
+.btn-delete-data:disabled { opacity: .35; cursor: not-allowed; }
+#delete-confirm-overlay .consent-box { border-left: 3px solid rgba(239,68,68,.5); padding: 16px 16px 14px; }
+#delete-confirm-overlay .consent-box h2 { text-align: left; font-size: 13px; font-weight: 650; margin-bottom: 6px; }
+#delete-confirm-overlay .consent-body { margin-bottom: 16px; font-size: 11.5px; line-height: 1.6; }
+#delete-confirm-overlay .consent-buttons { justify-content: flex-end; gap: 6px; }
+.btn-delete-confirm {
+  padding: 7px 14px; background: rgba(239,68,68,.1); color: #f87171;
+  border: 1.5px solid rgba(239,68,68,.25); border-radius: var(--radius-sm);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: background .15s, border-color .15s; white-space: nowrap;
+}
+.btn-delete-confirm:hover { background: rgba(239,68,68,.2); border-color: rgba(239,68,68,.48); }
+.btn-delete-confirm:disabled { opacity: .45; cursor: not-allowed; }
+</style>
+</head>
+<body>
+
+<!-- Consent Banner (shown only on first open) -->
+<div id="consent-overlay" class="consent-overlay" style="display:none">
+  <div class="consent-box">
+    <div class="consent-icon">🔒</div>
+    <h2 data-i18n="consentTitle">Datenschutz &amp; Datenfreigabe</h2>
+    <p class="consent-body" data-i18n="consentBody">Smart Skip kann anonyme Nutzungsdaten teilen, um die Erkennung für alle Nutzer zu verbessern. Es werden keine persönlichen Daten erhoben.</p>
+    <ul class="consent-list">
+      <li data-i18n="consentPoint1">Anonyme Geräte-ID (kein Name, keine E-Mail, keine IP-Speicherung)</li>
+      <li data-i18n="consentPoint2">Welche Skip-Schaltflächen erkannt und geklickt wurden</li>
+      <li data-i18n="consentPoint3">Zeitpunkte im Video (wann beginnt der Intro?)</li>
+    </ul>
+    <p class="consent-note" data-i18n="consentNote">Jederzeit in den Einstellungen änderbar.</p>
+    <div class="consent-buttons">
+      <button id="btn-consent-yes" class="btn-consent-yes" data-i18n="consentYes">✓ Ja, helfen</button>
+      <button id="btn-consent-no" class="btn-consent-no" data-i18n="consentNo">Nein, nur lokal</button>
+    </div>
+  </div>
+</div>
+
+<!-- Header -->
+<div class="header">
+  <div class="logo">
+    <img src="../assets/icons/icon-48.png" alt="Smart Skip">
+  </div>
+  <div class="header-text">
+    <h1>Smart Skip</h1>
+    <p id="domain-label">—</p>
+  </div>
+  <div class="status-dot off" id="status-dot"
+    data-tooltip="KI-Status: Grün = Gemini Nano aktiv · Blau = Regel-Fallback · Grau = inaktiv"></div>
+  <a href="https://smartskipv2.kernelminds.de" target="_blank" class="btn-header-icon"
+    data-tooltip="Website öffnen — Anleitung, Features & mehr">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="2" y1="12" x2="22" y2="12"/>
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+    </svg>
+  </a>
+  <button id="btn-reset-domain" class="btn-header-icon"
+    data-tooltip="Gelernte Selektoren & Zeitfenster für diese Domain löschen und sofort neu scannen">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+      <path d="M3.51 9a9 9 0 0 1 14.68-3.61L23 10M1 14l4.81 4.61A9 9 0 0 0 20.49 15"/>
+    </svg>
+  </button></div>
+  <!-- kept for JS compat -->
+  <div id="ai-badge"></div>
+</div>
+
+<!-- Version-Gate (injected by popup.js) -->
+<div id="version-gate">
+  <div id="version-gate-head">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    <div>
+      <div id="version-gate-title"></div>
+      <div id="version-gate-sub"></div>
+    </div>
+    <svg id="version-gate-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+  </div>
+  <div id="version-gate-body">
+    <div id="version-gate-changelog"></div>
+  </div>
+</div>
+<a id="version-gate-cws" href="https://chrome.google.com/webstore" target="_blank">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+  Im Chrome Web Store aktualisieren
+</a>
+<!-- Admin announcement (injected by popup.js) -->
+<div id="announcement-bar"></div>
+<!-- Maintenance banner (injected by popup.js) -->
+<div id="maintenance-banner"></div>
+<!-- Server broadcasts (injected by popup.js) -->
+<div id="broadcast-banner"></div>
+<!-- Quick-Actions (injected by popup.js) -->
+<div id="quick-actions-bar"></div>
+
+<!-- AI setup banner -->
+<div id="ai-banner">
+  <div class="ai-banner-head" id="ai-banner-head">
+    <span class="ai-banner-icon">⚡</span>
+    <span class="ai-banner-title">KI nicht aktiv
+      <span class="ai-banner-sub"> — Regel-Fallback läuft</span>
+    </span>
+    <svg class="ai-banner-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+  </div>
+  <div class="ai-banner-body">
+    <p class="ai-banner-note">Gemini&nbsp;Nano ist auf deinem Gerät nicht aktiviert. Smart&nbsp;Skip funktioniert trotzdem — mit regelbasierter Erkennung. Für bessere Trefferquoten diese Flags einmalig setzen:</p>
+    <div class="ai-steps">
+      <div class="ai-step">
+        <span class="ai-step-num">1</span>
+        <span class="ai-step-url">chrome://flags/#optimization-guide-on-device-model</span>
+        <button class="ai-step-copy" data-copy="chrome://flags/#optimization-guide-on-device-model">Kopieren</button>
+      </div>
+      <div class="ai-step">
+        <span class="ai-step-num">2</span>
+        <span class="ai-step-url">chrome://flags/#prompt-api-for-gemini-nano-multimodal-input</span>
+        <button class="ai-step-copy" data-copy="chrome://flags/#prompt-api-for-gemini-nano-multimodal-input">Kopieren</button>
+      </div>
+      <div class="ai-step">
+        <span class="ai-step-num">3</span>
+        <span class="ai-step-url" style="color:var(--muted)">Beide auf „Enabled“ → Chrome neu starten</span>
+      </div>
+    </div>
+    <button class="ai-banner-dismiss" id="ai-banner-dismiss">Nicht mehr anzeigen</button>
+  </div>
+</div>
+
+<main>
+
+<!-- Unsupported site notice -->
+<div id="unsupported-banner">
+  <div class="unsupported-banner-head">
+    <span class="unsupported-banner-icon">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+      </svg>
+    </span>
+    <span class="unsupported-banner-title">Nicht unterstützte Seite
+      <span class="unsupported-banner-sub" id="unsupported-banner-sub"></span>
+    </span>
+  </div>
+  <p class="unsupported-banner-note" id="unsupported-banner-note"></p>
+</div>
+
+<!-- Now playing -->
+<p class="section-heading" id="heading-now-playing" data-i18n="sectionCurrentSeries">Gerade aktiv</p>
+<div id="now-playing-wrap">
+  <div class="series-card empty" id="series-card">
+    <div class="series-card-header">
+      <div class="label" data-i18n="seriesLabel">Serie</div>
+      <button id="btn-scan-now" class="btn-scan-now"
+        data-tooltip="Sofort nach Skip-Buttons suchen, ohne das nächste Intervall abzuwarten">⏭︎ <span data-i18n="scanNowBtn">Now</span></button>
+    </div>
+    <div class="title" id="series-title" data-i18n-default="noSeriesDetected">Keine erkannt</div>
+    <div class="episode" id="series-episode"></div>
+  </div>
+
+  <!-- Stats bar -->
+  <div class="stats-bar">
+  <div class="stats-pill" data-tooltip="Gesamtzahl aller automatisch übersprungenen Intros, Recaps, Credits und Werbung">
+    <div class="stats-pill-icon">
+      <!-- skip / zap -->
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+      </svg>
+    </div>
+    <div class="stats-pill-text">
+      <span class="stats-value" id="stat-total">—</span>
+      <span class="stats-label" data-i18n="statTotalLabel">Übersprungen</span>
+    </div>
+  </div>
+  <div class="stats-pill" data-tooltip="Art und Zeitpunkt des zuletzt übersprungenen Segments">
+    <div class="stats-pill-icon" id="stat-last-icon">
+      <!-- clock -->
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <polyline points="12 6 12 12 16 14"/>
+      </svg>
+    </div>
+    <div class="stats-pill-text">
+      <span class="stats-value" id="stat-last-type">—</span>
+      <span class="stats-label" id="stat-last-time">—</span>
+    </div>
+  </div>
+  <div class="stats-pill" data-tooltip="Heute übersprungen — wird jeden Tag um Mitternacht zurückgesetzt">
+    <div class="stats-pill-icon">
+      <!-- calendar today -->
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+        <line x1="16" y1="2" x2="16" y2="6"/>
+        <line x1="8" y1="2" x2="8" y2="6"/>
+        <line x1="3" y1="10" x2="21" y2="10"/>
+        <circle cx="12" cy="16" r="1.2" fill="currentColor" stroke="none"/>
+      </svg>
+    </div>
+    <div class="stats-pill-text">
+      <span class="stats-value" id="stat-today">0</span>
+      <span class="stats-label" data-i18n="statTodayLabel">Today</span>
+    </div>
+  </div>
+  </div><!-- /stats-bar -->
+</div><!-- /now-playing-wrap -->
+
+<!-- Last action (legacy compat) -->
+<div class="last-action" id="last-action" style="display:none">
+  <span data-i18n="lastSkipped">⏭ Zuletzt übersprungen:</span> <span id="last-action-type">—</span>
+</div>
+
+<!-- Global toggles -->
+<p class="section-heading" data-i18n="sectionGlobal">Global</p>
+<div class="toggle-list">
+  <div class="toggle-row">
+    <div class="row-left">
+      <span class="row-label" data-i18n="toggleEnabled">Smart Skip aktiv</span>
+      <span class="row-desc" data-i18n="toggleEnabledDesc">Extension global ein-/ausschalten</span>
+    </div>
+    <label class="toggle"><input type="checkbox" id="globalEnabled"><span class="knob"></span></label>
+  </div>
+  <div class="toggle-row">
+    <div class="row-left">
+      <span class="row-label" data-i18n="toggleHUD">Status-Overlay</span>
+      <span class="row-desc" data-i18n="toggleHUDDesc">Kleines Overlay im Player anzeigen</span>
+    </div>
+    <label class="toggle"><input type="checkbox" id="hudEnabled"><span class="knob"></span></label>
+  </div>
+  <div class="toggle-row">
+    <div class="row-left">
+      <span class="row-label" data-i18n="toggleBadge">Skip-Badge</span>
+      <span class="row-desc" data-i18n="toggleBadgeDesc">Anzahl heute überspringter Szenen am Icon anzeigen</span>
+    </div>
+    <label class="toggle"><input type="checkbox" id="badgeEnabled"><span class="knob"></span></label>
+  </div>
+  <div class="toggle-row" id="snooze-row">
+    <div class="row-left">
+      <span class="row-label" data-i18n="snoozeLabel">Pause</span>
+      <span class="row-desc" id="snooze-desc" data-i18n="snoozeDescText">Briefly disable auto-skip</span>
+    </div>
+    <div class="snooze-pills">
+      <button class="btn-snooze" data-minutes="15" data-tooltip="Auto-Skip für 15 Minuten pausieren">15 Min</button>
+      <button class="btn-snooze" data-minutes="60" data-tooltip="Auto-Skip für 1 Stunde pausieren">1 Std</button>
+      <button class="btn-snooze" data-minutes="0" data-tooltip="Aktive Pause beenden, Auto-Skip wieder aktivieren">✕</button>
+    </div>
+  </div>
+  <div class="toggle-row">
+    <div class="row-left">
+      <span class="row-label" data-i18n="toggleCloudSync">Erkennung verbessern</span>
+      <span class="row-desc" data-i18n="toggleCloudSyncDesc">Anonym zur Erkennung für alle beitragen</span>
+    </div>
+    <label class="toggle"><input type="checkbox" id="cloudSync"><span class="knob"></span></label>
+  </div>
+  <div class="toggle-row" id="domain-row">
+    <div class="row-left">
+      <span class="row-label" data-i18n="toggleDomainEnabled">Auf dieser Seite aktiv</span>
+      <span class="row-desc" id="domain-row-desc"></span>
+    </div>
+    <label class="toggle"><input type="checkbox" id="domainEnabled"><span class="knob"></span></label>
+  </div>
+</div>
+
+<!-- Per-series toggles -->
+<p class="section-heading" id="series-settings-label">Serie — Standard</p>
+<div class="toggle-list" id="series-toggle-list">
+  <div class="toggle-row">
+    <div class="row-left">
+      <span class="row-label" data-i18n="toggleSkipIntro">Intro überspringen</span>
+      <span class="row-desc" data-i18n="toggleSkipIntroDesc">Vorspann / Opening</span>
+    </div>
+    <label class="toggle"><input type="checkbox" id="skipIntro"><span class="knob"></span></label>
+  </div>
+  <div class="toggle-row">
+    <div class="row-left">
+      <span class="row-label" data-i18n="toggleSkipRecap">Wiederholung überspringen</span>
+      <span class="row-desc" data-i18n="toggleSkipRecapDesc">Previously on / Recap</span>
+    </div>
+    <label class="toggle"><input type="checkbox" id="skipRecap"><span class="knob"></span></label>
+  </div>
+  <div class="toggle-row">
+    <div class="row-left">
+      <span class="row-label" data-i18n="toggleSkipCredits">Abspann überspringen</span>
+      <span class="row-desc" data-i18n="toggleSkipCreditsDesc">Credits / Outro</span>
+    </div>
+    <label class="toggle"><input type="checkbox" id="skipCredits"><span class="knob"></span></label>
+  </div>
+  <div class="toggle-row">
+    <div class="row-left">
+      <span class="row-label" data-i18n="toggleSkipAds">Werbung überspringen</span>
+      <span class="row-desc" data-i18n="toggleSkipAdsDesc">Skip-Ad Buttons</span>
+    </div>
+    <label class="toggle"><input type="checkbox" id="skipAds"><span class="knob"></span></label>
+  </div>
+  <div class="toggle-row">
+    <div class="row-left">
+      <span class="row-label" data-i18n="toggleAutoNext">Nächste Folge automatisch</span>
+      <span class="row-desc" data-i18n="toggleAutoNextDesc">Auto-Next Episode</span>
+    </div>
+    <label class="toggle"><input type="checkbox" id="autoNext"><span class="knob"></span></label>
+  </div>
+</div>
+
+<!-- Per-episode overrides -->
+<div id="episode-section" style="display:none">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin:18px 0 7px">
+    <p class="section-heading" id="episode-settings-label" style="margin:0;flex:1">Folge — Ausnahme</p>
+    <button class="btn-ep-reset" id="btn-ep-reset" title="Folgen-Override zurücksetzen">&#x21BA; <span data-i18n="episodeOverrideReset">Reset</span></button>
+  </div>
+  <p class="ep-inherit-note" id="ep-inherit-note" data-i18n="episodeInheritNote">Alle Werte von Serie geerbt — hier überschreiben:</p>
+  <div class="toggle-list">
+    <div class="toggle-row">
+      <div class="row-left">
+        <span class="row-label ep-label" data-field="skipIntro" data-i18n="epLabelIntro">Intro</span>
+        <span class="row-desc" data-i18n="episodeOnly">nur diese Folge</span>
+      </div>
+      <label class="toggle"><input type="checkbox" id="ep_skipIntro"><span class="knob"></span></label>
+    </div>
+    <div class="toggle-row">
+      <div class="row-left">
+        <span class="row-label ep-label" data-field="skipRecap" data-i18n="epLabelRecap">Wiederholung</span>
+        <span class="row-desc" data-i18n="episodeOnly">nur diese Folge</span>
+      </div>
+      <label class="toggle"><input type="checkbox" id="ep_skipRecap"><span class="knob"></span></label>
+    </div>
+    <div class="toggle-row">
+      <div class="row-left">
+        <span class="row-label ep-label" data-field="skipCredits" data-i18n="epLabelCredits">Abspann</span>
+        <span class="row-desc" data-i18n="episodeOnly">nur diese Folge</span>
+      </div>
+      <label class="toggle"><input type="checkbox" id="ep_skipCredits"><span class="knob"></span></label>
+    </div>
+    <div class="toggle-row">
+      <div class="row-left">
+        <span class="row-label ep-label" data-field="skipAds" data-i18n="epLabelAds">Werbung</span>
+        <span class="row-desc" data-i18n="episodeOnly">nur diese Folge</span>
+      </div>
+      <label class="toggle"><input type="checkbox" id="ep_skipAds"><span class="knob"></span></label>
+    </div>
+    <div class="toggle-row">
+      <div class="row-left">
+        <span class="row-label ep-label" data-field="autoNext" data-i18n="epLabelNext">Weiter</span>
+        <span class="row-desc" data-i18n="episodeOnly">nur diese Folge</span>
+      </div>
+      <label class="toggle"><input type="checkbox" id="ep_autoNext"><span class="knob"></span></label>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" data-i18n="toastSaved">Gespeichert ✓</div>
+<div id="tt" class="tt"></div>
+
+<!-- Erkenntnisse -->
+<details class="insights-section" id="insights-details">
+  <summary class="insights-summary" data-tooltip="Gelernte CSS-Selektoren und Zeitfenster, die Smart Skip für diese Domain gespeichert hat">
+    <span data-i18n="insightsTitle">Erkenntnisse</span>
+    <span class="insights-badge" id="insights-badge"></span>
+  </summary>
+  <div class="insights-body" id="insights-body">
+    <p class="insights-empty" data-i18n="insightsEmpty">Keine Daten für diese Domain.</p>
+  </div>
+  <div style="padding: 0 13px 12px; display:flex; gap:8px; flex-wrap:wrap">
+    <button class="btn-insight" id="btn-clear-domain" data-tooltip="Alle gelernten Daten für diese Domain löschen (Selektoren, Zeitfenster, Feedback)" data-i18n="insightsClearBtn">Domain zurücksetzen</button>
+    <button class="btn-insight" id="btn-refresh-insights" data-tooltip="Aktuelle Erkenntnisse aus dem Speicher neu laden" data-i18n="insightsRefreshBtn">↻ Aktualisieren</button>
+  </div>
+</details>
+
+<!-- DSGVO Art. 17 -->
+<div id="delete-data-row" style="display:none">
+  <div class="toggle-list" style="margin-top:8px">
+    <div class="toggle-row">
+      <div class="row-left">
+        <span class="row-label" data-i18n="deleteMyData">Cloud-Daten löschen</span>
+        <span class="row-desc" data-i18n="deleteMyDataDesc">Alle Daten dieser Geräte-ID vom Server entfernen</span>
+      </div>
+      <button class="btn-delete-data" id="btn-delete-data" data-i18n="deleteMyDataBtn">Löschen</button>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<!-- Delete-data confirm modal -->
+<div id="delete-confirm-overlay" class="consent-overlay" style="display:none">
+  <div class="consent-box">
+    <h2 data-i18n="deleteMyDataTitle">Cloud-Daten löschen?</h2>
+    <p class="consent-body">Hiermit werden <strong>alle Daten deiner anonymen Geräte-ID</strong> unwiderruflich aus unserer Datenbank gelöscht &mdash; einschließlich aller erlernten Selektoren, Timing-Fenster und Nutzungsstatistiken, die du beigetragen hast.</p>
+    <p class="consent-body" style="margin-top:-6px; color: var(--muted)">Nach dem Löschen erhältst du beim nächsten Opt-in eine neue Geräte-ID. Bisher gesammelte Daten anderer Nutzer bleiben unberührt.</p>
+    <div class="consent-buttons">
+      <button id="btn-delete-cancel" class="btn-consent-no" data-i18n="cancel">Abbrechen</button>
+      <button id="btn-delete-confirm" class="btn-delete-confirm" data-i18n="deleteMyDataConfirmBtn">Unwiderruflich löschen</button>
+    </div>
+  </div>
+</div>
+
+<script src="../content/config.js"></script>
+<script src="../shared/ai-utils.js"></script>
+<script src="../shared/i18n.js"></script>
+<script src="popup.js"></script>
+
+</body>
+</html>

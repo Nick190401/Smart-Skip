@@ -1,0 +1,157 @@
+{
+  "manifest_version": 3,
+  "name": "Smart Skip v2",
+  "version": "2.0.0",
+  "description": "Auto-skip intros, recaps, credits and ads on streaming platforms — powered by on-device AI (Gemini Nano).",
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "smart-skip-v2@extension.local",
+      "strict_min_version": "109.0"
+    }
+  },
+
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+
+  "trial_tokens": [
+    "Alr+QJJFRediw1PyKVzcED6ehCSfc+lFlCwjVxjQsUjfIxUSVgmR7kT+xgIm+X/El522w8w1D65Go3jlM1+6yg4AAAB7eyJvcmlnaW4iOiJjaHJvbWUtZXh0ZW5zaW9uOi8vZGZvaWVvbGphaGhrbW9lYW5mbmhscGRobmllaHBwZWkiLCJmZWF0dXJlIjoiQUlQcm9tcHRBUElNdWx0aW1vZGFsSW5wdXQiLCJleHBpcnkiOjE3ODE1NjgwMDB9"
+  ],
+
+  "host_permissions": [
+    "*://*.netflix.com/*",
+    "*://*.disneyplus.com/*",
+    "*://*.amazon.com/*",
+    "*://*.amazon.de/*",
+    "*://*.amazon.co.uk/*",
+    "*://*.amazon.fr/*",
+    "*://*.amazon.it/*",
+    "*://*.amazon.es/*",
+    "*://*.amazon.ca/*",
+    "*://*.amazon.com.au/*",
+    "*://*.amazon.co.jp/*",
+    "*://*.amazon.in/*",
+    "*://*.amazon.com.br/*",
+    "*://*.amazon.com.mx/*",
+    "*://*.amazon.nl/*",
+    "*://*.amazon.se/*",
+    "*://*.amazon.pl/*",
+    "*://*.primevideo.com/*",
+    "*://*.crunchyroll.com/*",
+    "*://*.hulu.com/*",
+    "*://*.apple.com/*",
+    "*://*.tv.apple.com/*",
+    "*://*.hbomax.com/*",
+    "*://*.max.com/*",
+    "*://*.paramountplus.com/*",
+    "*://*.peacocktv.com/*",
+    "*://*.funimation.com/*",
+    "*://*.wakanim.tv/*",
+    "*://*.sky.de/*",
+    "*://*.joyn.de/*",
+    "*://*.rtl.de/*",
+    "*://*.prosieben.de/*",
+    "*://*.zdf.de/*",
+    "*://*.ard.de/*",
+    "*://*.viki.com/*",
+    "*://*.vimeo.com/*",
+    "*://*.dailymotion.com/*",
+    "*://smartskipv2.kernelminds.de/*"
+  ],
+
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.netflix.com/*",
+        "*://*.disneyplus.com/*",
+        "*://*.amazon.com/*",
+        "*://*.amazon.de/*",
+        "*://*.amazon.co.uk/*",
+        "*://*.amazon.fr/*",
+        "*://*.amazon.it/*",
+        "*://*.amazon.es/*",
+        "*://*.amazon.ca/*",
+        "*://*.amazon.com.au/*",
+        "*://*.amazon.co.jp/*",
+        "*://*.amazon.nl/*",
+        "*://*.amazon.se/*",
+        "*://*.amazon.pl/*",
+        "*://*.primevideo.com/*",
+        "*://*.crunchyroll.com/*",
+        "*://*.hulu.com/*",
+        "*://*.apple.com/*",
+        "*://*.tv.apple.com/*",
+        "*://*.hbomax.com/*",
+        "*://*.max.com/*",
+        "*://*.paramountplus.com/*",
+        "*://*.peacocktv.com/*",
+        "*://*.funimation.com/*",
+        "*://*.wakanim.tv/*",
+        "*://*.sky.de/*",
+        "*://*.joyn.de/*",
+        "*://*.rtl.de/*",
+        "*://*.prosieben.de/*",
+        "*://*.zdf.de/*",
+        "*://*.ard.de/*",
+        "*://*.viki.com/*",
+        "*://*.vimeo.com/*",
+        "*://*.dailymotion.com/*"
+      ],
+      "js": [
+        "shared/ai-utils.js",
+        "shared/i18n.js",
+        "content/config.js",
+        "content/platforms.js",
+        "content/learning-store.js",
+        "content/sync-service.js",
+        "content/ai-classifier.js",
+        "content/dom-scanner.js",
+        "content/signal-collector.js",
+        "content/timing-skipper.js",
+        "content/skipper.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Smart Skip v2",
+    "default_icon": {
+      "16": "assets/icons/icon-16.png",
+      "32": "assets/icons/icon-32.png",
+      "48": "assets/icons/icon-48.png"
+    }
+  },
+
+  "commands": {
+    "manual-skip": {
+      "suggested_key": { "default": "Alt+S", "mac": "Alt+S" },
+      "description": "Manually trigger skip scan"
+    }
+  },
+
+  "icons": {
+    "16":  "assets/icons/icon-16.png",
+    "32":  "assets/icons/icon-32.png",
+    "48":  "assets/icons/icon-48.png",
+    "96":  "assets/icons/icon-96.png",
+    "128": "assets/icons/icon-128.png"
+  },
+
+  "background": {
+    "service_worker": "background/background.js"
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": ["content/page-interceptor.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

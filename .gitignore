@@ -1,0 +1,20 @@
+# Lokale IDE-Einstellungen
+.vscode/
+.idea/
+
+# Alte Versionsarchive (lokal)
+versionen/
+
+# Interne Copilot-Notizen (k�nnen Credential-Hinweise enthalten)
+.github/copilot-instructions.md
+# API-Schlüssel — NIEMALS committen
+# Danach: git update-index --skip-worktree content/config.js
+content/config.js
+# Server credentials (DB password + API key)
+server/config.php
+# node_modules (falls je ein Build-Schritt hinzukommt)
+node_modules/
+
+# Website-Quellcode (separates Projekt, nicht im Extension-Repo)
+site/
+server/auth.php
