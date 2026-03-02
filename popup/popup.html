@@ -118,6 +118,29 @@ main { padding: 0 14px; }
 .series-card .episode { font-size: 11px; color: var(--text2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .series-card.empty .title { color: var(--muted); font-weight: 400; font-style: italic; }
 
+/* Timing chips — show known intro/credits/recap windows below the episode line */
+.timing-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.timing-chips:empty { display: none; }
+.timing-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 7px 2px 6px;
+  border-radius: 100px;
+  font-size: 10px; font-weight: 600;
+  border: 1px solid rgba(255,255,255,.1);
+  background: rgba(255,255,255,.05);
+  color: var(--text2);
+  white-space: nowrap;
+}
+.timing-chip::before { content: ''; width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+.timing-chip.intro   { color: #60a5fa; border-color: rgba(96,165,250,.25);  background: rgba(96,165,250,.08); }
+.timing-chip.intro::before   { background: #60a5fa; }
+.timing-chip.recap   { color: #fbbf24; border-color: rgba(251,191,36,.25);   background: rgba(251,191,36,.08); }
+.timing-chip.recap::before   { background: #fbbf24; }
+.timing-chip.credits { color: #a78bfa; border-color: rgba(167,139,250,.25);  background: rgba(167,139,250,.08); }
+.timing-chip.credits::before { background: #a78bfa; }
+.timing-chip.ads     { color: #f87171; border-color: rgba(248,113,113,.25);  background: rgba(248,113,113,.08); }
+.timing-chip.ads::before     { background: #f87171; }
+
 /* ── Stats bar ─────────────────────────────────────────── */
 .stats-bar { display: flex; gap: 7px; margin-top: 7px; }
 .stats-pill {
@@ -731,6 +754,7 @@ details[open] .insights-summary::after { transform: rotate(90deg); }
     </div>
     <div class="title" id="series-title" data-i18n-default="noSeriesDetected">Keine erkannt</div>
     <div class="episode" id="series-episode"></div>
+    <div class="timing-chips" id="timing-chips"></div>
   </div>
 
   <!-- Stats bar -->

@@ -46,6 +46,7 @@ const el = {
   btnScanNow:     $('btn-scan-now'),
   snoozeDesc:     $('snooze-desc'),
   statToday:      $('stat-today'),
+  timingChips:    $('timing-chips'),
 };
 
 // State
@@ -91,7 +92,7 @@ const SERIES_DEFAULTS = {
     chrome.tabs.query({ active: true, currentWindow: true }),
     chrome.storage.local.get([
       'ss2', 'ss2_consent', 'ss2_stats', 'lastClick',
-      'ss2_ai_status_cache', 'ss2_snooze', 'ss2_ai_banner_dismissed',
+      'ss2_ai_status_cache', 'ss2_snooze', 'ss2_ai_banner_dismissed', 'ss2_timing_status',
     ]),
   ]);
 
@@ -188,6 +189,8 @@ const SERIES_DEFAULTS = {
       if (area !== 'local') return;
       const entry = changes[watchKey]?.newValue;
       if (entry?.series?.title) { applySeriesInfo(entry.series); renderSettings(); }
+      // Live-update timing chips when TimingSkipper writes new windows
+      if (changes.ss2_timing_status) _renderTimingChips(changes.ss2_timing_status.newValue);
     });
   }
 
@@ -791,8 +794,31 @@ function applySeriesInfo(series) {
   const epName = series.episodeName || '';
   el.seriesEpisode.textContent = epCode && epName ? `${epCode} · ${epName}`
                                  : epCode || epName || '';
-  el.seriesLabel.textContent = `${i18n.t('seriesHeadingPrefix')} — ${series.title}`;
+  el.seriesLabel.textContent = `${i18n.t('seriesHeadingPrefix')} — ${series.title}`;  // Refresh timing chips for this series
+  chrome.storage.local.get('ss2_timing_status').then(d => _renderTimingChips(d.ss2_timing_status)).catch(() => {});
 }
+
+/**
+ * Render timing-window chips in the series card.
+ * Chips show known intro/recap/credits windows from TimingSkipper.
+ */
+function _renderTimingChips(status) {
+  if (!el.timingChips) return;
+  if (!status?.windows?.length) { el.timingChips.innerHTML = ''; return; }
+  const LABELS = { intro: 'Intro', recap: 'Recap', credits: 'Credits', ads: 'Ad' };
+  const fmt = s => {
+    const m = Math.floor(s / 60), sec = Math.round(s % 60);
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  };
+  el.timingChips.innerHTML = status.windows
+    .filter(w => w.confidence >= 0.50)
+    .sort((a, b) => a.from - b.from)
+    .map(w => {
+      const src = w.count > 1 ? ` \u00b7 ${w.count}\u00d7` : '';
+      return `<span class="timing-chip ${w.type}" title="Konfidenz: ${Math.round(w.confidence * 100)}%${src}">`
+           + `${LABELS[w.type] ?? w.type} ${fmt(w.from)}\u2013${fmt(w.to)}`
+           + `</span>`;
+    }).join('');}
 
 function seriesSettings() {
   const key = currentSeries ? `${currentDomain}:${currentSeries.title}` : null;

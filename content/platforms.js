@@ -168,6 +168,38 @@ class DisneyPlusPlatform extends BasePlatform {
     const episode = this.text('[class*="subtitle"]', '[data-testid="content-subtitle"]') || 'unknown';
     return { title, episode, source: 'disneyplus' };
   }
+
+  extractTimings() {
+    try {
+      const state = window.__PLAYER_STATE__
+                 || window.__dcp_internal_player_state__
+                 || window.bmxAccountState?.playerState
+                 || window.bmxPlayerState;
+      const markers = state?.playbackContext?.skipMarkers
+                   || state?.playerControls?.skipMarkers
+                   || state?.skipMarkers
+                   || state?.markers;
+      if (markers?.length) return this._normalizeMarkers(markers);
+      return null;
+    } catch { return null; }
+  }
+
+  _normalizeMarkers(markers) {
+    const TYPE_MAP = {
+      INTRO: 'intro', intro: 'intro', opening: 'intro', OPENING: 'intro',
+      RECAP: 'recap', recap: 'recap', previously: 'recap',
+      CREDIT: 'credits', CREDITS: 'credits', credits: 'credits',
+      OUTRO: 'credits', outro: 'credits', ending: 'credits', ENDING: 'credits',
+      AD: 'ads', ADS: 'ads', ads: 'ads',
+    };
+    return markers
+      .map(m => ({
+        type: TYPE_MAP[m.type] || TYPE_MAP[m.skipType] || TYPE_MAP[m.markerType] || null,
+        from: +(m.startPosition ?? m.start ?? m.startTime ?? m.from ?? 0),
+        to:   +(m.endPosition   ?? m.end   ?? m.endTime   ?? m.to   ?? 0),
+      }))
+      .filter(m => m.type && m.to > m.from && m.to - m.from < 1200);
+  }
 }
 
 // Amazon Prime Video
@@ -193,6 +225,32 @@ class PrimeVideoPlatform extends BasePlatform {
   }
 
   getContainer() { return document.body; }
+
+  extractTimings() {
+    try {
+      // Prime Video exposes intro-skip info via nvpController or window globals
+      const ctrl  = window.nvpController || window.pv_atv_controller;
+      const state = ctrl?.playerState ?? ctrl?.state ?? null;
+      if (state) {
+        const intro = state.introSkipInfo ?? state.skipIntro ?? state.introMarker;
+        if (intro) {
+          const from = +(intro.startPosition ?? intro.start ?? 0);
+          const to   = +(intro.endPosition   ?? intro.end   ?? 0);
+          if (to > from) return [{ type: 'intro', from, to }];
+        }
+      }
+      const raw = window.__INITIAL_STATE__;
+      if (!raw) return null;
+      const ep = raw?.playback ?? raw?.playerConfig ?? raw?.videoMeta;
+      if (ep?.intro) {
+        const i    = ep.intro;
+        const from = +(i.start ?? i.startPosition ?? 0);
+        const to   = +(i.end   ?? i.endPosition   ?? from + 90);
+        if (to > from) return [{ type: 'intro', from, to }];
+      }
+      return null;
+    } catch { return null; }
+  }
 }
 
 // Crunchyroll

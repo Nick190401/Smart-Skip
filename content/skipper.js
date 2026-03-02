@@ -428,8 +428,9 @@ class SmartSkipV2 {
       }
     }
 
-    // multilingual keyword scan across the full document
-    const SKIP_WORDS = /skip|überspringen|weiter\s*(?:zur|zum)?\s*(?:episode|folge)?|intro\s*(?:skip)?|(?:next|nächste)\s*(?:episode|folge)|recap|credits|abspann|vorspann|wiederholung|zusammenfassung|pular|saltar|ignorer|hoppa/i;
+    // multilingual keyword scan — includes autoplay-countdown patterns
+    // ("Continue watching", "Weiter", "Next Episode in 5", etc.)
+    const SKIP_WORDS = /skip|überspringen|\bweiter\b|continue\s*(?:watching|playing)?|keep\s+watching|jetzt\s*(?:ansehen|weitersehen)|intro\s*(?:skip)?|(?:next|nächste)\s*(?:episode|folge)|next\s*ep\b|recap|credits|abspann|vorspann|wiederholung|zusammenfassung|pular|saltar|ignorer|hoppa/i;
     for (const el of document.querySelectorAll('button, [role="button"], [data-t], [aria-label]')) {
       if (!this._isClickable(el)) continue;
       const label = (el.getAttribute('aria-label') || '').trim();
@@ -560,6 +561,16 @@ class SmartSkipV2 {
         seriesKey: tSeriesKey,
         epKey:     tEpKey,
         settings:  this._currentSeriesSettings(),
+        onNearEnd: () => {
+          // Prefetch timing data for the next episode so auto-skip is instant
+          // when autoplay starts without waiting for the 30-s refresh cycle.
+          const nextKey = this._nextEpisodeKey(tEpKey);
+          if (nextKey) {
+            syncService.fetchTimings(nextKey).catch(() => {});
+            console.info(`[SmartSkip] prefetching next episode: ${nextKey}`);
+          }
+          syncService.fetchTimings(tSeriesKey).catch(() => {});
+        },
         onSkip: (win) => {
           win._undoTime = document.querySelector('video')?.currentTime - 1;
           this._flashHUDTiming(win);
@@ -952,6 +963,23 @@ class SmartSkipV2 {
   _episodeKey(title, episode) {
     if (!episode || episode === 'unknown') return null;
     return `${location.hostname}:${title}:${episode}`;
+  }
+
+  // Infer the key for the next episode to prefetch timing data before autoplay.
+  // Supports SxxExx and bare Eyyy formats. Returns null for unparseable keys.
+  _nextEpisodeKey(epKey) {
+    if (!epKey) return null;
+    const m = epKey.match(/^(.+S\d{1,2}E)(\d{1,3})$/);
+    if (m) {
+      const next = String(parseInt(m[2], 10) + 1).padStart(m[2].length, '0');
+      return `${m[1]}${next}`;
+    }
+    const m2 = epKey.match(/^(.+E)(\d{2,3})$/);
+    if (m2) {
+      const next = String(parseInt(m2[2], 10) + 1).padStart(m2[2].length, '0');
+      return `${m2[1]}${next}`;
+    }
+    return null;
   }
 
   _currentSeriesSettings() {

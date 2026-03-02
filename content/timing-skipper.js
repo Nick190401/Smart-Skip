@@ -33,8 +33,12 @@ class TimingSkipper {
     this._epKey         = null;
     this._onSkip             = null;  // callback (window) — fires on auto-jump
     this._onHint             = null;  // callback (window) — fires on weak signal
+    this._onNearEnd          = null;  // callback () — fires once at 85% playtime for prefetch
     this._windowRefreshTimer = null;  // periodic re-load of timing windows
     this._trackListener      = null;  // addtrack listener for late-loading subtitles
+    this._cueChangeHandlers  = new Map(); // TextTrack → handler fn, for cleanup
+    this._cueStartTimes      = {};    // type → currentTime when cue went active
+    this._prefetchDone       = false; // fires onNearEnd only once per arm
   }
 
   /**
@@ -42,13 +46,14 @@ class TimingSkipper {
    *   onSkip(win)  — called when confidence ≥ 0.65 and we're about to jump
    *   onHint(win)  — called when 0.50 ≤ confidence < 0.65 (show manual-skip UI)
    */
-  async arm({ seriesKey, epKey, settings, onSkip, onHint }) {
+  async arm({ seriesKey, epKey, settings, onSkip, onHint, onNearEnd }) {
     this.disarm();
-    this._seriesKey = seriesKey;
-    this._epKey     = epKey;
-    this._settings  = settings;
-    this._onSkip    = onSkip  || (() => {});
-    this._onHint    = onHint  || (() => {});
+    this._seriesKey  = seriesKey;
+    this._epKey      = epKey;
+    this._settings   = settings;
+    this._onSkip     = onSkip    || (() => {});
+    this._onHint     = onHint    || (() => {});
+    this._onNearEnd  = onNearEnd || null;
     this._skippedTypes.clear();
     this._hintedTypes.clear();
 
@@ -69,6 +74,7 @@ class TimingSkipper {
     this._attachListeners();
     this._startWindowRefresh();
     this._listenForNewTracks();
+    this._startCueChangeListeners();
 
     // Check immediately — video may already be inside a known window
     // (e.g. arm() called mid-episode or after a SPA navigation).
@@ -91,10 +97,18 @@ class TimingSkipper {
       try { this._video.textTracks.removeEventListener('addtrack', this._trackListener); } catch {}
       this._trackListener = null;
     }
+    // Clean up all cuechange listeners
+    for (const [track, handler] of this._cueChangeHandlers) {
+      try { track.removeEventListener('cuechange', handler); } catch {}
+    }
+    this._cueChangeHandlers.clear();
+    this._cueStartTimes  = {};
+    this._prefetchDone   = false;
     this._windows     = [];
     this._video       = null;
     this._seriesKey   = null;
     this._epKey       = null;
+    this._onNearEnd   = null;
     this._skippedTypes.clear();
     this._hintedTypes.clear();
   }
@@ -131,6 +145,7 @@ class TimingSkipper {
     }
 
     this._windows = this._mergeWindows(raw);
+    this._writeTimingStatus();
 
     // Persist windows discovered from authoritative sources (platform API,
     // subtitle tracks, MediaSession) back to LearningStore and the cloud.
@@ -412,15 +427,101 @@ class TimingSkipper {
     }, 30_000);
   }
 
+  // ── Real-time cuechange tracking ─────────────────────────────────────────
+  //
+  // Attaches `cuechange` to every text track on the video element.  When a
+  // cue whose text matches a skip-type keyword becomes *active*, we record
+  // `from = currentTime`.  When it goes *inactive* we close the window and
+  // persist it immediately — no button click needed, no polling delay.
+  // This is the highest-precision source for tracks that actually label their
+  // cues (Netflix, Apple TV+, many anime platforms).
+  _startCueChangeListeners() {
+    const video = this._video;
+    if (!video) return;
+    for (const track of video.textTracks) this._attachCueChangeOnTrack(track);
+  }
+
+  _attachCueChangeOnTrack(track) {
+    if (this._cueChangeHandlers.has(track)) return;
+    const handler = () => {
+      if (!this._armed || !this._video) return;
+      const t        = this._video.currentTime;
+      const active   = track.activeCues ? [...track.activeCues] : [];
+      const activeTypes = new Set();
+
+      for (const cue of active) {
+        const text = (cue.text || '').replace(/<[^>]+>/g, '').trim();
+        const type = this._cueTextToType(text);
+        if (!type || type === '__content_start') continue;
+        activeTypes.add(type);
+        if (!(type in this._cueStartTimes)) {
+          this._cueStartTimes[type] = t; // cue just became active
+        }
+      }
+
+      // Detect cues that just went inactive
+      for (const type of Object.keys(this._cueStartTimes)) {
+        if (!activeTypes.has(type)) {
+          const from = this._cueStartTimes[type];
+          delete this._cueStartTimes[type];
+          const to = t;
+          if (to - from >= 3 && to - from <= 600) {
+            this._onCueWindow(type, from, to, track.kind);
+          }
+        }
+      }
+    };
+    this._cueChangeHandlers.set(track, handler);
+    try { track.addEventListener('cuechange', handler); } catch {}
+  }
+
+  _onCueWindow(type, from, to, trackKind) {
+    const conf = trackKind === 'chapters' ? 0.94 : 0.84;
+    // Merge into live windows immediately so _tick() can act this cycle
+    const existing = this._windows.find(w => w.type === type);
+    if (existing && Math.abs(existing.from - from) <= 20) {
+      existing.from       = Math.min(existing.from, Math.round(from));
+      existing.to         = Math.max(existing.to,   Math.round(to));
+      existing.confidence = Math.max(existing.confidence, conf);
+    } else if (!existing) {
+      this._windows.push({ type, from: Math.round(from), to: Math.round(to), confidence: conf, sources: [`cuechange:${trackKind}`], count: 1 });
+    }
+    if (!this._tickHandler) this._attachListeners();
+    this._tick();
+    // Persist so next episode benefits without a repeated cue scan
+    if (this._seriesKey) {
+      const f = Math.round(from), t2 = Math.round(to);
+      learningStore.recordTimingWindow(this._seriesKey, type, f, t2);
+      if (this._epKey) learningStore.recordTimingWindow(this._epKey, type, f, t2);
+      syncService.recordTimingWindow(this._seriesKey, type, f, t2, `cuechange:${trackKind}`);
+      if (this._epKey) syncService.recordTimingWindow(this._epKey, type, f, t2, `cuechange:${trackKind}`);
+    }
+    console.info(`[SmartSkip timing] cuechange captured ${type} ${from.toFixed(0)}\u2192${to.toFixed(0)}s src=cuechange:${trackKind}`);
+    this._writeTimingStatus();
+  }
+
+  // Write current windows summary to storage so the popup can display them.
+  _writeTimingStatus() {
+    if (!this._seriesKey) return;
+    try {
+      const summary = this._windows
+        .filter(w => w.confidence >= 0.50)
+        .map(w => ({ type: w.type, from: Math.round(w.from), to: Math.round(w.to), confidence: +(w.confidence.toFixed(2)), count: w.count ?? 1 }));
+      chrome.storage.local.set({ ss2_timing_status: { seriesKey: this._seriesKey, windows: summary, ts: Date.now() } });
+    } catch {}
+  }
+
   // Listen for new TextTrack additions — subtitle .vtt files are fetched
   // asynchronously and their cues are the best source for cold-start platforms
   // that have no visible skip buttons.
   _listenForNewTracks() {
     const video = this._video;
     if (!video) return;
-    this._trackListener = () => {
+    this._trackListener = (event) => {
       if (!this._armed) return;
-      // Brief delay so cues are actually populated before we read them
+      // Hook cuechange on the new track immediately — don't wait for 1.5 s
+      if (event?.track) this._attachCueChangeOnTrack(event.track);
+      // Brief delay so cues are actually populated before we do a one-shot read
       setTimeout(() => {
         if (!this._armed) return;
         const fresh = this._fromTracks();
@@ -459,6 +560,13 @@ class TimingSkipper {
     if (video.duration && video.duration < 480) return;
 
     const t = video.currentTime;
+
+    // Near-end prefetch — fire once at 85% through the episode so the next
+    // episode's timing data is ready in LearningStore before autoplay starts.
+    if (!this._prefetchDone && video.duration > 0 && t / video.duration > 0.85) {
+      this._prefetchDone = true;
+      if (this._onNearEnd) try { this._onNearEnd(); } catch {}
+    }
     for (const win of this._windows) {
       if (this._skippedTypes.has(win.type)) continue;
       if (!this._typeAllowed(win.type)) continue;
