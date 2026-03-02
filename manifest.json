@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Smart Skip v2",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Auto-skip intros, recaps, credits and ads on streaming platforms — powered by on-device AI (Gemini Nano).",
 
   "browser_specific_settings": {
