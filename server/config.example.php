@@ -36,6 +36,15 @@ define('MAX_TIMING_ENTRIES',   1000);
 // NIEMALS in ein öffentliches Repository einchecken!
 define('JWT_SECRET', 'YOUR_JWT_SECRET_MIN_32_CHARS');   // ← ersetzen
 
+// ── SMTP (für OTP-E-Mails) ─────────────────────────────────────────────────
+// Port 465 = implizites SSL (SMTPS)
+define('SMTP_HOST',      'smtp.hostinger.com');         // ← dein SMTP-Server
+define('SMTP_PORT',      465);
+define('SMTP_USER',      'YOUR_SMTP_USER');              // ← ersetzen
+define('SMTP_PASS',      'YOUR_SMTP_PASSWORD');          // ← ersetzen
+define('SMTP_FROM',      'YOUR_FROM_ADDRESS');           // ← ersetzen
+define('SMTP_FROM_NAME', 'Smart Skip Support');
+
 // Erlaubte Origins für auth.php (Auth-API nie mit Wildcard betreiben!)
 define('AUTH_ALLOWED_ORIGINS', [
     'https://deine-domain.de',
