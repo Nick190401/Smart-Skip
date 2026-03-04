@@ -50,10 +50,14 @@ const el = {
 };
 
 // State
-let settings     = null;
+let settings      = null;
 let currentSeries = null;
 let currentDomain = '';
 let _lastAiStatus = 'unavailable'; // stored so renderSettings can re-apply the dot
+// Set to true the first time save() is called after popup open.
+// Phase 4 background fetches skip their renderSettings() call once this is set
+// to avoid overwriting in-memory changes the user made before the fetch resolved.
+let _savedSinceOpen = false;
 
 // Must stay in sync with BLOCKED_DOMAINS in content/skipper.js
 const POPUP_BLOCKED_DOMAINS = new Set([
@@ -73,6 +77,7 @@ const DEFAULTS = {
   badgeEnabled: true,
   domains: {},
   series: {},
+  episodes: {},
 };
 
 const SERIES_DEFAULTS = {
@@ -104,21 +109,25 @@ const SERIES_DEFAULTS = {
 
   // Consent overlay — data already in cache, no extra await needed
   const consentOverlay = document.getElementById('consent-overlay');
-  const ss2_consent = cache.ss2_consent;
-  if (!ss2_consent) {
+  // Keep consent in memory so the cloudSync toggle handler can write synchronously
+  // (avoids an async storage.get that may be killed when the popup closes quickly).
+  let _consent = cache.ss2_consent ?? null;
+  if (!_consent) {
     consentOverlay.style.display = 'flex';
     document.getElementById('btn-consent-yes').addEventListener('click', async () => {
-      await chrome.storage.local.set({ ss2_consent: { sync: true, askedAt: Date.now() } });
+      _consent = { sync: true, askedAt: Date.now() };
+      await chrome.storage.local.set({ ss2_consent: _consent });
       consentOverlay.style.display = 'none';
       if (el.cloudSync) el.cloudSync.checked = true;
     });
     document.getElementById('btn-consent-no').addEventListener('click', async () => {
-      await chrome.storage.local.set({ ss2_consent: { sync: false, askedAt: Date.now() } });
+      _consent = { sync: false, askedAt: Date.now() };
+      await chrome.storage.local.set({ ss2_consent: _consent });
       consentOverlay.style.display = 'none';
       if (el.cloudSync) el.cloudSync.checked = false;
     });
   } else {
-    if (el.cloudSync) el.cloudSync.checked = ss2_consent.sync === true;
+    if (el.cloudSync) el.cloudSync.checked = _consent.sync === true;
   }
 
   // Settings pre-render from cache — always initialize so renderSettings() never sees null
@@ -233,7 +242,7 @@ const SERIES_DEFAULTS = {
 
   // Auto-save on any toggle change
   const autoSaveIds = [
-    'globalEnabled','hudEnabled','domainEnabled',
+    'globalEnabled','hudEnabled','badgeEnabled','domainEnabled',
     'skipIntro','skipRecap','skipCredits','skipAds','autoNext',
     'ep_skipIntro','ep_skipRecap','ep_skipCredits','ep_skipAds','ep_autoNext',
   ];
@@ -242,12 +251,14 @@ const SERIES_DEFAULTS = {
     if (input) input.addEventListener('change', save);
   }
 
-  // Cloud-Sync toggle — save consent choice immediately
+  // Cloud-Sync toggle — write synchronously using the in-memory consent object.
+  // Never do an async storage.get here: the popup can close before it resolves,
+  // which would silently drop the user's change.
   if (el.cloudSync) {
-    el.cloudSync.addEventListener('change', async () => {
+    el.cloudSync.addEventListener('change', () => {
       const enabled = el.cloudSync.checked;
-      const existing = (await chrome.storage.local.get('ss2_consent')).ss2_consent ?? {};
-      await chrome.storage.local.set({ ss2_consent: { ...existing, sync: enabled } });
+      _consent = { ...(_consent ?? {}), sync: enabled };
+      chrome.storage.local.set({ ss2_consent: _consent });
       // SyncService reacts automatically via chrome.storage.onChanged listener
       _updateDeleteDataRow(enabled);
     });
@@ -405,15 +416,26 @@ const SERIES_DEFAULTS = {
 
   const extVersion = chrome.runtime.getManifest().version;
 
-  // Fresh settings from background SW (replaces the cache-based pre-render)
+  // Fresh settings from background SW (replaces the cache-based pre-render).
+  // Guard: if the user already toggled something since open, their in-memory
+  // changes take precedence — skip the overwrite to avoid a visual reset.
   sendMessage({ action: 'getSettings' }).then(resp => {
-    if (resp?.settings) { settings = { ...DEFAULTS, ...resp.settings }; renderSettings(); }
+    if (resp?.settings && !_savedSinceOpen) {
+      settings = { ...DEFAULTS, ...resp.settings };
+      renderSettings();
+    }
   }).catch(() => {});
 
   // Content script series fallback — fires only when tab series cache was empty
   if (tab?.id) {
     chrome.tabs.sendMessage(tab.id, { action: 'fetchSeries' })
-      .then(csResp => { if (csResp?.series) { applySeriesInfo(csResp.series); renderSettings(); } })
+      .then(csResp => {
+        if (csResp?.series) {
+          applySeriesInfo(csResp.series);
+          // Only re-render if the user hasn't already made changes
+          if (!_savedSinceOpen) renderSettings();
+        }
+      })
       .catch(() => {});
   }
 
@@ -837,6 +859,7 @@ function episodeSettings() {
 
 // Save
 async function save() {
+  _savedSinceOpen = true;
   settings.globalEnabled = el.globalEnabled.checked;
   settings.hudEnabled    = el.hudEnabled.checked;
   settings.badgeEnabled  = el.badgeEnabled.checked;

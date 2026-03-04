@@ -376,6 +376,11 @@ class SmartSkipV2 {
         this._updateMeta();
       }
 
+      // Reveal hover-gated player controls (skip buttons hidden until mouse moves)
+      // before collecting candidates. The 250 ms wait lets CSS transitions finish.
+      this._nudgePlayerControls();
+      await new Promise(resolve => setTimeout(resolve, 250));
+
       const candidates = this._collectCandidates(container);
 
       // Gather all clickable buttons from both sources into one list, then
@@ -1248,6 +1253,30 @@ class SmartSkipV2 {
   }
 
   //  Utility helpers
+
+  /**
+   * Fires synthetic mouse events over the video element (and its parent wrapper)
+   * to un-hide player controls that are only visible on hover. Many streaming
+   * platforms fade their overlay buttons to opacity 0 or display:none while the
+   * mouse is idle — this nudge triggers the same CSS hover states a real mouse
+   * move would produce, so the skip button is visible when we scan for it.
+   */
+  _nudgePlayerControls() {
+    const video = document.querySelector('video');
+    if (!video) return;
+    const r = video.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return;
+    const cx = r.left + r.width  / 2;
+    const cy = r.top  + r.height / 2;
+    const opts = { bubbles: true, cancelable: true, clientX: cx, clientY: cy };
+    // Target both the video element and its direct parent — many players attach
+    // hover listeners to a wrapper div rather than the <video> element itself.
+    for (const target of [video.parentElement, video]) {
+      if (!target) continue;
+      target.dispatchEvent(new MouseEvent('mouseenter', opts));
+      target.dispatchEvent(new MouseEvent('mousemove',  opts));
+    }
+  }
 
   _isClickable(el) {
     if (!el || el.disabled) return false;

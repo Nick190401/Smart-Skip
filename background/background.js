@@ -19,6 +19,7 @@ const DEFAULTS = {
   verboseLogging: false,
   domains: {},
   series: {},
+  episodes: {},
 };
 
 // ── Install / Update ─────────────────────────────────────────────────────────
@@ -278,9 +279,13 @@ async function saveSettings(settings) {
   try {
     await chrome.storage.sync.set({ ss2: clean });
   } catch {
-    // Sync quota exceeded (lots of series) — fall back to local
-    await chrome.storage.local.set({ ss2: clean });
+    // Sync quota exceeded — remove the now-stale sync entry so that loadSettings
+    // does not silently return old sync data instead of the fresh local copy.
+    try { await chrome.storage.sync.remove('ss2'); } catch {}
   }
+  // Always mirror to local storage. This ensures the popup's Phase 1 pre-render
+  // always reads the latest settings without waiting for the async background fetch.
+  await chrome.storage.local.set({ ss2: clean });
 }
 
 // ── Cleanup per-tab series cache when tab closes or navigates away ──────────
