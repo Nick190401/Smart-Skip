@@ -1,26 +1,14 @@
 /**
- * Collects skip-timing signals from multiple sources and writes complete
- * {from, to} windows into LearningStore — no AI, no user interaction needed.
+ * Derives {from, to} windows from the page itself — no AI, no user interaction.
  *
- * Sources:
- *   A. Fetch/XHR responses  — intercepts the platform's own API calls in page
- *      context via an injected <script> and listens for postMessage replies.
- *      Gives exact {from, to} directly from the platform's own data.
+ *   A. Fetch/XHR/WS   the platform's own API responses, via an injected
+ *                     page-context interceptor (see page-interceptor.js)
+ *   B. Chapter DOM    progress-bar markers and <track kind="chapters"> cues
+ *   C. window state   timing-shaped globals (introStart, skipMarkers[], …)
+ *   D. Button life    a skip button appearing = from, disappearing = to.
+ *                     Beats click time, which lags by 1-5 s.
  *
- *   B. Chapter/marker DOM   — reads timestamps from progress-bar marker elements
- *      and <track kind="chapters"> cues. Two adjacent markers give a full window.
- *
- *   C. window-state scan    — searches window.* globals for timing-shaped objects
- *      (introStart/introEnd, skipMarkers[], chapter arrays, etc.)
- *
- *   D. Button lifecycle     — MutationObserver records video.currentTime when a
- *      skip button *appears* (= from) and *disappears* (= to). More precise than
- *      recording the click time, which always lags by 1-5 s.
- *
- * Everything found is fed into learningStore.recordTimingWindow() and also
- * submitted to the cloud via syncService so all users benefit.
- *
- * Needs: learning-store.js, sync-service.js loaded first.
+ * Load after learning-store.js and sync-service.js.
  */
 
 class SignalCollector {

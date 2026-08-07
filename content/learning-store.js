@@ -1,8 +1,8 @@
 ﻿/**
- * Speichert alles, was die Extension zwischen Browser-Neustarts lernt:
- * CSS-Selektoren pro Domain, Klick-Feedback und Zeitstempel pro Serie/Folge.
+ * Everything the extension learns across restarts: per-domain selectors, click
+ * feedback, and per-series/episode timing windows.
  *
- * Alles in chrome.storage.local unter "ss2_learn".
+ * All of it lives in chrome.storage.local under "ss2_learn".
  */
 
 class LearningStore {
@@ -77,16 +77,6 @@ class LearningStore {
     return entry;
   }
 
-  /** Mark a skip selector as confirmed (quality++) */
-  async confirmSelector(domain, selector) {
-    await this._ensureLoaded();
-    const entry = this._data.selectors[domain];
-    if (!entry) return;
-    entry.quality = (entry.quality || 0) + 1;
-    entry.ts = Date.now();
-    this._scheduleSave();
-  }
-
   /** Remove a bad selector (called when a selector no longer finds anything) */
   async removeSkipSelector(domain, selector) {
     await this._ensureLoaded();
@@ -121,18 +111,6 @@ class LearningStore {
     this._scheduleSave();
   }
 
-  /** Get highest-confidence known selector for a button type on a domain */
-  async getBestSelector(domain, buttonType) {
-    await this._ensureLoaded();
-    const key = `${domain}:${buttonType}`;
-    const entry = this._data.feedback[key];
-    if (!entry || !entry.selector || entry.hits < 2) return null;
-    // Only trust if hit rate is decent
-    const total = entry.hits + entry.misses;
-    if (total > 0 && entry.hits / total < 0.5) return null;
-    return entry.selector;
-  }
-
   /** Get all known button-type selectors for a domain */
   async getAllFeedbackSelectors(domain) {
     await this._ensureLoaded();
@@ -150,25 +128,15 @@ class LearningStore {
   //  3. Video-Time Patterns
 
   /**
-   * Record an exact skip window {from, to} discovered by signal-collector.
-   * Windows from multiple independent sessions are merged — overlapping ones
-   * are kept as separate entries so predictWindow() can pick the dominant cluster.
+   * Record an observed {from, to} window.
    *
-   * Observations are bucketed *per episode* rather than averaged into one blurred
-   * range. Averaging across episodes was the root cause of phantom skips: an intro
-   * at 62 s in episode 1 and at 95 s in episode 3 collapsed into a single 78 s
-   * window that matched neither, while `count` — and therefore confidence — kept
-   * climbing. predictWindow() now derives the series prior from the median across
-   * *distinct* episodes and can see how far they actually disagree.
+   * Bucketed per episode, never averaged across them: an intro at 62 s in ep 1
+   * and 95 s in ep 3 must not collapse into a 78 s window matching neither while
+   * confidence climbs. predictWindow() takes the median across distinct episodes.
    *
-   * @param {number} [initialCount=1]  Pass server-reported count when
-   *   storing a window received from fetchTimings so that confidence
-   *   reflects how many devices contributed, not just 1.
-   * @param {object} [meta]            { epKey, duration, server }
-   *   epKey    — episode this observation came from; observations without one
-   *              cannot prove episode diversity and are pooled under '_unknown'.
-   *   duration — video.duration at observation time, used to reject a prior
-   *              whose episode had a very different length.
+   * @param {number} [initialCount] server-reported device count
+   * @param {object} [meta] { epKey, duration, server } — epKey proves episode
+   *   diversity; without one the observation is pooled under '_unknown'
    */
   async recordTimingWindow(seriesKey, type, from, to, initialCount = 1, meta = {}) {
     await this._ensureLoaded();
@@ -236,22 +204,6 @@ class LearningStore {
   }
 
   /**
-   * Downgrade a window that produced a bad skip (user sought back / jump failed).
-   * Reduces its count by 2; removes it once count reaches 0.
-   * This is the windows-bucket counterpart to the timings-bucket poison in recordTiming.
-   */
-  async downgradeTimingWindow(seriesKey, type, from, to) {
-    await this._ensureLoaded();
-    const list = this._data.windows?.[seriesKey]?.[type];
-    if (!list) return;
-    const idx = list.findIndex(w => Math.abs(w.from - from) <= 20 && Math.abs(w.to - to) <= 20);
-    if (idx === -1) return;
-    list[idx].count = Math.max(0, (list[idx].count ?? 1) - 2);
-    if (list[idx].count === 0) list.splice(idx, 1);
-    this._scheduleSave();
-  }
-
-  /**
    * Hard rejection: the user undid the skip or seeked back into the window.
    * A rejection is far stronger evidence than a sighting — one wrong jump in
    * episode 5 must outweigh three passive sightings in episodes 1-3, otherwise
@@ -300,27 +252,15 @@ class LearningStore {
   }
 
   /**
-   * Predict the skip window for a series/episode.
-   * Returns { from, to, confidence, source, tier, nEps, spread, stable } or null.
+   * Predicted window, or null. Sources by priority: exact windows, server
+   * cluster, local point-in-time observations.
    *
-   * Priority:
-   *   1. Exact windows from signal-collector (windows bucket) — highest confidence
-   *   2. Server window from crowdsourced API (timings._server)
-   *   3. Cluster of local point-in-time observations (timings._local / array)
+   * This is memory, never live evidence, so series-tier results are capped below
+   * the caller's auto-skip threshold — they can hint but never jump alone. Only
+   * an episode-tier hit or live corroboration gets past that line.
    *
-   * Everything returned here is *memory*, never live evidence. Series-tier
-   * predictions are therefore hard-capped at PRIOR_CAP, which sits below the
-   * caller's auto-skip threshold: a series prior can raise suspicion and drive a
-   * manual hint, but it can never fire a jump on its own. Only an episode-tier
-   * prediction (same episode, seen before) or live corroboration in the page
-   * gets past that line.
-   *
-   * @param {string} key                 series or episode key
-   * @param {string} buttonType
-   * @param {object} [ctx]
-   *   tier     — 'series' (default) or 'episode'
-   *   duration — current video.duration, used to reject priors recorded on
-   *              episodes of a very different length
+   * @param {object} [ctx] { tier: 'series'|'episode', duration }
+   * @returns {?{from, to, confidence, source, tier, nEps, spread, agreement, stable}}
    */
   async predictWindow(key, buttonType, ctx = {}) {
     await this._ensureLoaded();
@@ -469,33 +409,6 @@ class LearningStore {
       };
     } else {
       bucket[buttonType]._server = { from: window.from, to: window.to, avg: window.avg, samples: window.samples };
-    }
-    this._scheduleSave();
-  }
-
-  /** Get all timing data for a series (for popup display) */
-  async getTimings(seriesKey) {
-    await this._ensureLoaded();
-    return this._data.timings[seriesKey] || {};
-  }
-
-  //  Introspection (for popup)
-
-  async getSummary(domain, seriesKey) {
-    await this._ensureLoaded();
-    const selectors = this._data.selectors[domain] || null;
-    const feedback  = Object.entries(this._data.feedback)
-      .filter(([k]) => k.startsWith(domain + ':'))
-      .map(([k, v]) => ({ type: k.slice(domain.length + 1), ...v }));
-    const timings   = seriesKey ? (this._data.timings[seriesKey] || {}) : {};
-    return { selectors, feedback, timings };
-  }
-
-  async clearDomain(domain) {
-    await this._ensureLoaded();
-    delete this._data.selectors[domain];
-    for (const key of Object.keys(this._data.feedback)) {
-      if (key.startsWith(domain + ':')) delete this._data.feedback[key];
     }
     this._scheduleSave();
   }

@@ -214,15 +214,10 @@ class SyncService {
   }
 
   /**
-   * Submit a button HTML fingerprint for cross-platform pattern training.
-   * The server aggregates these per domain so it can return an improved
-   * button-text-pattern list to the DOMScanner and recognise new platforms
-   * without us having to write hard-coded selectors.
-   * Fire-and-forget.
-   *
-   * @param {string} domain
-   * @param {string} type   'intro' | 'recap' | 'credits' | 'ads'
-   * @param {object} sig    { tag, text, classes, attrs }
+   * Button fingerprint for cross-platform pattern training: the server feeds
+   * these back as text patterns, so new platforms work without hard-coded
+   * selectors. Fire-and-forget.
+   * @param {object} sig { tag, text, classes, attrs }
    */
   recordButtonSignature(domain, type, sig) {
     if (this._isTelemetryBlocked()) return;
@@ -480,14 +475,9 @@ class SyncService {
   }
 
   /**
-   * POST to the sync API with a hard timeout.
-   *
-   * Without one, a server that accepts the connection but never answers — a
-   * captive portal, an overloaded host, a blackholed DNS entry — leaves the
-   * promise pending forever. Callers that await it (arming the timing skipper,
-   * extension start-up) would then hang for the lifetime of the page, so a slow
-   * server silently disabled the whole extension. Fail fast instead: every
-   * caller already treats a rejection as "offline, carry on".
+   * Timeout is not optional: a host that accepts the connection but never
+   * answers would leave start-up and arming pending for the life of the page.
+   * Every caller treats a rejection as "offline, carry on".
    */
   async _post(payload, timeoutMs = SYNC_TIMEOUT_MS) {
     const data = await this._fetchJSON(payload, timeoutMs);

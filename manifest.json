@@ -102,6 +102,7 @@
         "*://*.dailymotion.com/*"
       ],
       "js": [
+        "shared/defaults.js",
         "shared/ai-utils.js",
         "shared/i18n.js",
         "content/config.js",

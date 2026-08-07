@@ -39,15 +39,6 @@ class AIClassifier {
     return ruleResult;
   }
 
-  /** Synchronous classify, used where latency matters more than accuracy */
-  classifySync(button) {
-    const fp = this._fingerprint(button);
-    if (this._cache.has(fp)) return this._cache.get(fp);
-    const result = this._ruleClassify(button);
-    this._cache.set(fp, result);
-    return result;
-  }
-
   async aiStatus() {
     return ssAI.availabilityStatus();
   }
@@ -142,7 +133,18 @@ Category?`;
     if (button.getAttribute('data-uia')?.includes('skip-recap'))
       return { type: 'recap', confidence: 1, source: 'rule' };
 
-    // Amazon
+    // What the button *says* outranks what its container is called. Players reuse
+    // one wrapper class for every overlay action, so a class-based rule that fires
+    // at 0.95 short-circuits both the AI and every keyword rule below it — a
+    // "Nächste Folge" button wearing a skip-element class was being clicked as an
+    // intro skip, with skipIntro enabled by default, in the middle of the episode.
+    const NEXT_EPISODE_TEXT =
+      /next\s*(?:episode|ep\b|up\b)|nächste\s*(?:folge|episode)|siguiente\s*(?:episodio|capítulo)|prochain\s*épisode|próximo\s*epis|prossimo\s*episodio|volgende\s*aflevering|następny\s*odcinek|次のエピソード|다음\s*에피소드|下一集/i;
+    if (NEXT_EPISODE_TEXT.test(text) || NEXT_EPISODE_TEXT.test(attrs))
+      return { type: 'next', confidence: 0.95, source: 'rule' };
+
+    // Amazon: the skip-element wrapper is genuinely an intro skip only when its
+    // own text does not say otherwise (checked above).
     if (cls.includes('atvwebplayersdk-skipelement'))
       return { type: 'intro', confidence: 0.95, source: 'rule' };
 
@@ -237,7 +239,12 @@ Category?`;
     }
 
     // Build one prompt with all ambiguous buttons + full context
-    const timeCtx  = context.videoTime != null ? `${Math.round(context.videoTime)}s into the episode` : 'unknown timestamp';
+    const timeCtx = context.videoTime == null
+      ? 'unknown timestamp'
+      : context.duration
+        ? `${Math.round(context.videoTime)}s of ${Math.round(context.duration)}s `
+          + `(${Math.round(context.duration - context.videoTime)}s remaining)`
+        : `${Math.round(context.videoTime)}s into the episode`;
     const mediaCtx = context.series
       ? `Series: "${context.series}"${context.episode ? `, episode ${context.episode}` : ''}`
       : 'streaming video';
@@ -254,6 +261,9 @@ Category?`;
 `Streaming player. ${mediaCtx}. Video position: ${timeCtx}.
 Classify each UI button. For each output exactly one line: INDEX:CATEGORY:CONFIDENCE(0-100)
 Categories: intro recap credits ads next none
+Players keep some buttons mounted for the whole episode, so judge by what the
+button does, not by whether it is on screen. A button that starts the next
+episode is "next" even far from the end.
 ${buttonLines}`;
 
     try {

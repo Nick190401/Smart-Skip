@@ -9,9 +9,7 @@
 // English base strings (source of truth)
 const I18N_EN = {
   // Header
-  loading:               'Loading…',
   aiReady:               'Gemini AI',
-  aiDownloading:         'AI (DL)',
   aiRule:                'Smart',
 
   // Series card
@@ -20,11 +18,15 @@ const I18N_EN = {
   noSeriesDetected:      'None detected',
   lastSkipped:           '⏭ Last skipped:',
 
+  // In-player HUD buttons. t() echoes the key when it is missing, and the key
+  // is truthy, so the `|| 'Undo'` fallbacks at the call sites never fired — the
+  // HUD showed a lowercase "undo" / "skip" in every language.
+  undo:                  'Undo',
+  skip:                  'Skip',
+
   // Section headings
   sectionGlobal:         'Global',
-  sectionSeriesDefault:  'Series — Default',
   seriesHeadingPrefix:   'Series',
-  sectionEpisodeOverride:'Episode — Override',
   episodeHeadingPrefix:  'Episode',
   episodeOverrideReset:  'Reset',
   episodeInheritNote:    'All values inherited from series — override here:',
@@ -41,7 +43,6 @@ const I18N_EN = {
   toggleCloudSync:       'Cloud Sync',
   toggleCloudSyncDesc:   'Share anonymous data to improve detection for everyone',
   toggleDomainEnabled:   'Active on this site',
-  toggleDomainEnabledDesc:'Disable Smart Skip for this domain only',
 
   // Skip toggles
   toggleSkipIntro:       'Skip intro',
@@ -63,19 +64,29 @@ const I18N_EN = {
   epLabelNext:           'Next',
 
   // Buttons
-  saveBtn:               'Save settings',
   toastSaved:            'Saved ✓',
   deleteMyData:          'Delete cloud data',
   deleteMyDataDesc:      'Remove selectors, timings & statistics',
   deleteMyDataBtn:       'Delete',
   deleteMyDataTitle:     'Delete cloud data?',
-  deleteMyDataConfirm:   'All your anonymous cloud data (selectors, timings, statistics) will be permanently deleted.',
   deleteMyDataConfirmBtn:'Delete permanently',
   deleteMyDataDone:      'Cloud data deleted.',
   deleteMyDataError:     'Deletion failed. Are you online?',
   cancel:                'Cancel',
 
   // Insights
+  // How it works
+  hiwTitle:              'How Smart Skip works',
+  hiwScanTitle:          'Spotting buttons',
+  hiwScanDesc:           'Smart Skip keeps scanning the player for skip buttons. The AI sorts each one it finds — intro, recap, credits, ads or next episode.',
+  hiwLearnTitle:         'Remembering time ranges',
+  hiwLearnDesc:          'Every skip records when the segment started and ended, kept separately per episode. Scrubbing past the same spot yourself teaches it too.',
+  hiwSwarmTitle:         'Shared knowledge',
+  hiwSwarmDesc:          'With your consent these time ranges are shared anonymously. The more devices report the same range, the more dependable it gets — which is what helps you on a series you are watching for the first time.',
+  hiwNoButtonTitle:      'Episodes without a button',
+  hiwNoButtonDesc:       'When an episode offers no skip button at all, the learned time range takes over, so Smart Skip still jumps at the right moment.',
+  hiwCautionNote:        'Experience from other episodes stays a hint, not proof: episode 5 need not be built like episodes 1–3. It only skips on its own when the player confirms it right now — otherwise you get a button to trigger it yourself.',
+
   insightsTitle:         'Insights',
   insightsLoading:       'loading…',
   insightsEmpty:         'No AI data for this domain yet.',
@@ -147,25 +158,22 @@ const I18N_EN = {
   hudSourceRule:         'Rule',
 
   // AI translation notice
-  aiTranslationHint:     'Do not translate: Smart Skip, HUD, Intro, Recap, Credits, CSS selectors, S01E01.',
 };
 
 // German built-in
 const I18N_DE = {
-  loading:               'Lädt…',
   aiReady:               'Gemini AI',
-  aiDownloading:         'AI (DL)',
   aiRule:                'Smart',
 
   sectionCurrentSeries:  'Aktuelle Serie',
   seriesLabel:           'Serie',
   noSeriesDetected:      'Keine erkannt',
   lastSkipped:           '⏭ Zuletzt übersprungen:',
+  undo:                  'Rückgängig',
+  skip:                  'Überspringen',
 
   sectionGlobal:         'Global',
-  sectionSeriesDefault:  'Serie — Standard',
   seriesHeadingPrefix:   'Serie',
-  sectionEpisodeOverride:'Folge — Override',
   episodeHeadingPrefix:  'Folge',
   episodeOverrideReset:  'Reset',
   episodeInheritNote:    'Alle Werte von Serie geerbt — hier überschreiben:',
@@ -181,7 +189,6 @@ const I18N_DE = {
   toggleCloudSync:       'Cloud-Sync',
   toggleCloudSyncDesc:   'Anonym zur besseren Erkennung für alle beitragen',
   toggleDomainEnabled:   'Auf dieser Seite aktiv',
-  toggleDomainEnabledDesc:'Smart Skip nur für diese Domain deaktivieren',
 
   toggleSkipIntro:       'Intro überspringen',
   toggleSkipIntroDesc:   'Vorspann / Opening',
@@ -200,17 +207,27 @@ const I18N_DE = {
   epLabelAds:            'Werbung',
   epLabelNext:           'Weiter',
 
-  saveBtn:               'Einstellungen speichern',
   toastSaved:            'Gespeichert ✓',
   deleteMyData:          'Cloud-Daten löschen',
   deleteMyDataDesc:      'Selektoren, Timings & Statistiken entfernen',
   deleteMyDataBtn:       'Löschen',
   deleteMyDataTitle:     'Cloud-Daten löschen?',
-  deleteMyDataConfirm:   'Alle anonymen Cloud-Daten (Selektoren, Timings, Statistiken) werden unwiderruflich gelöscht.',
   deleteMyDataConfirmBtn:'Unwiderruflich löschen',
   deleteMyDataDone:      'Cloud-Daten gelöscht.',
   deleteMyDataError:     'Löschen fehlgeschlagen. Bist du online?',
   cancel:                'Abbrechen',
+
+  // Wie es funktioniert
+  hiwTitle:              'Wie Smart Skip arbeitet',
+  hiwScanTitle:          'Buttons erkennen',
+  hiwScanDesc:           'Smart Skip durchsucht den Player laufend nach Skip-Buttons. Die KI ordnet jeden gefundenen Button zu — Intro, Recap, Abspann, Werbung oder nächste Folge.',
+  hiwLearnTitle:         'Zeitfenster merken',
+  hiwLearnDesc:          'Bei jedem Skip wird gespeichert, von wann bis wann das Segment lief — getrennt pro Folge. Auch wenn du selbst mehrfach über dieselbe Stelle spulst, wird das gelernt.',
+  hiwSwarmTitle:         'Schwarmwissen',
+  hiwSwarmDesc:          'Mit deiner Zustimmung werden diese Zeitfenster anonym geteilt. Je mehr Geräte dasselbe Fenster melden, desto verlässlicher wird es — davon profitierst du bei Serien, die du zum ersten Mal siehst.',
+  hiwNoButtonTitle:      'Folgen ohne Button',
+  hiwNoButtonDesc:       'Zeigt eine Folge gar keinen Skip-Button, greift das gelernte Zeitfenster — dann springt Smart Skip auch ohne Button an der richtigen Stelle.',
+  hiwCautionNote:        'Erfahrung aus anderen Folgen bleibt ein Hinweis, kein Beweis: Folge 5 muss nicht aufgebaut sein wie Folge 1–3. Automatisch gesprungen wird nur, wenn der Player es gerade bestätigt — sonst erscheint ein Button zum Selbstauslösen.',
 
   insightsTitle:         'Erkenntnisse',
   insightsLoading:       'lädt…',
@@ -374,9 +391,7 @@ class I18nService {
 
       const langName = LANG_NAMES[lang] || lang.toUpperCase();
 
-      // Build source object: exclude internal-only keys
       const source = { ...I18N_EN };
-      delete source.aiTranslationHint;
 
       const prompt =
         `Translate the following JSON UI strings for a streaming video extension into ${langName}.\n` +

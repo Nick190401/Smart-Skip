@@ -1,14 +1,9 @@
 /**
- * Shared AI utility — single source of truth for Gemini Nano availability
- * checks and session creation. Other modules (ai-classifier, dom-scanner,
- * signal-collector, timing-skipper, i18n) delegate to this instead of each
- * duplicating the Chrome 138+ / <138 API dance.
+ * Gemini Nano availability and session creation, in one place so callers do not
+ * each repeat the Chrome 138+ / pre-138 API dance.
  *
- * Usage:
- *   if (await ssAI.isAvailable()) { ... }
- *   const session = await ssAI.createSession({ systemPrompt, temperature, topK, outputLang });
- *   // ...use session.prompt()...
- *   session.destroy();
+ *   const s = await ssAI.createSession({ systemPrompt });
+ *   try { await s.prompt(...) } finally { s.destroy(); }
  */
 
 const ssAI = (() => {
@@ -89,15 +84,7 @@ const ssAI = (() => {
     return 'unavailable';
   }
 
-  /**
-   * Create a new LanguageModel session.
-   * @param {object} opts
-   * @param {string} opts.systemPrompt
-   * @param {number} [opts.temperature]  defaults to undefined (API default)
-   * @param {number} [opts.topK]         defaults to undefined
-   * @param {string} [opts.outputLang]   ISO 639-1 code (default 'en')
-   * @returns {Promise<object>} session with .prompt() and .destroy()
-   */
+  /** @param {object} [opts] { systemPrompt, temperature, topK, outputLang } */
   async function createSession({ systemPrompt, temperature, topK, outputLang } = {}) {
     const api = _api();
     if (!api) throw new Error('AI API unavailable');

@@ -1,45 +1,23 @@
 /**
- * Timing-based auto-skip — jumps video.currentTime to the end of an intro,
- * recap or credits segment when the playhead enters a known skip window,
- * even when there is no visible skip button on the page.
+ * Timing-based auto-skip: jumps the playhead past a known intro/recap/credits
+ * window, including on pages with no skip button.
  *
- * Detection tiers (best → weakest):
- *   0. Platform-native  — reads timing data already embedded in the page
- *   1. <track> / VTT    — chapter/subtitle cues ("Intro", "[♪ THEME ♪]", "Main Content")
- *   2. MediaSession     — navigator.mediaSession.metadata.chapterInfos (Chrome 128+)
- *   3. Community        — clustered server timings merged from all users
- *   4. Local            — clustered per-user observations from LearningStore
- *   5. AI subtitle      — Gemini Nano analyzes subtitle cues (cold-start only)
+ * Sources, strongest first: platform timing data, <track> cues, MediaSession
+ * chapters, crowd windows, local observations, Gemini Nano subtitle scan.
  *
- * Multiple sources for the same segment type are merged: independent signals
- * that agree multiply their confidence. Disagreeing clusters are resolved by
- * picking the dominant group (most members within ±20 s tolerance).
+ * Central rule — every source is either LOCAL (seen in this playback: proves
+ * something is on screen now) or PRIOR (remembered from other episodes or the
+ * crowd: predicts only). A prior alone may raise a hint but must be corroborated
+ * live before it jumps, or episode 5 gets cut at episode 1-3's timestamps.
  *
- * Evidence model
- * --------------
- * Sources split into two classes, and the distinction decides whether we may
- * jump the playhead:
- *
- *   LOCAL  — observed in *this* playback: platform timing data, text-track cues,
- *            live cuechange, MediaSession chapters, signal-collector findings.
- *            Proves something is happening right now.
- *   PRIOR  — remembered from other episodes of the same series, or crowd data.
- *            Predicts, but proves nothing about the episode on screen.
- *
- * A prior on its own can only raise a manual hint. To actually jump, it must be
- * corroborated live (a visible skip button, an active matching cue, the platform
- * itself) — otherwise episode 5 gets its intro cut out at the timestamp that
- * happened to work for episodes 1-3.
- *
- * Needs: learning-store.js, sync-service.js loaded first.
+ * Load after learning-store.js and sync-service.js.
  */
 
-// Sources that constitute live evidence from the episode currently playing.
 const SS_LOCAL_SOURCE_RE = /^(platform|track:|cuechange:|mediasession|ai-subtitle|signal:)/;
 
-const SS_FIRE_THRESHOLD   = 0.65; // jump the playhead at or above this
-const SS_HINT_THRESHOLD   = 0.50; // offer a manual skip button at or above this
-const SS_CORROB_BOOST     = 0.30; // added when a prior is confirmed live in the page
+const SS_FIRE_THRESHOLD = 0.65; // jump at or above
+const SS_HINT_THRESHOLD = 0.50; // offer a button at or above
+const SS_CORROB_BOOST   = 0.30; // added to a prior confirmed live
 
 class TimingSkipper {
   constructor() {
@@ -72,6 +50,7 @@ class TimingSkipper {
     this._selfSeekTarget     = null;  // where that seek was aimed
     this._armedAt            = 0;     // player start-up seeks are not user intent
     this._generation         = 0;     // bumped per arm(); invalidates in-flight loads
+    this._lastPlayTime       = null;  // last position playback reached, pre-seek
     this._userPlaced         = new Map(); // type → window the user parked inside
   }
 
@@ -80,17 +59,11 @@ class TimingSkipper {
     return !!source && SS_LOCAL_SOURCE_RE.test(source);
   }
 
-  /**
-   * Arm for the current episode. Call after meta changes.
-   *   onSkip(win)  — called when confidence ≥ 0.65 and we're about to jump
-   *   onHint(win)  — called when 0.50 ≤ confidence < 0.65 (show manual-skip UI)
-   */
+  /** Arm for the current episode; call whenever the detected episode changes. */
   async arm({ seriesKey, epKey, settings, onSkip, onHint, onNearEnd }) {
     this.disarm();
-    // Any _loadWindows() still in flight belongs to the previous episode. It
-    // must not finish into this one: on autoplay the next episode arms while the
-    // old load is mid-await, and its windows and local-evidence flags would be
-    // adopted as if they described the episode now playing.
+    // Invalidates in-flight loads: on autoplay the next episode arms while the
+    // previous _loadWindows() is mid-await, and its windows would land here.
     const gen = ++this._generation;
     this._seriesKey  = seriesKey;
     this._epKey      = epKey;
@@ -108,18 +81,15 @@ class TimingSkipper {
     this._selfSeekAt     = 0;
     this._selfSeekTarget = null;
     this._armedAt        = Date.now();
+    this._lastPlayTime   = null;
 
     const video = document.querySelector('video');
     if (!video) return;
     this._video = video;
 
-    // Proactively pull community timings from the cloud before loading local data,
-    // so first-time viewers benefit from what other users contributed.
-    //
-    // Capped: arming must not wait on the network. A slow or unreachable server
-    // used to delay it for as long as the request took, and the segments worth
-    // skipping are in the first minute — by the time arming finished the intro
-    // was over. If the fetch lands late, the 30-s window refresh picks it up.
+    // Crowd timings help first-time viewers, but the segments worth skipping are
+    // in the first minute — never wait longer than 2 s for them. A late arrival
+    // is folded in below.
     const cloud = Promise.allSettled([
       seriesKey ? syncService.fetchTimings(seriesKey) : null,
       epKey     ? syncService.fetchTimings(epKey)     : null,
@@ -129,7 +99,6 @@ class TimingSkipper {
 
     await this._loadWindows(gen);
     if (gen !== this._generation) return;
-    // Fold in whatever arrived after we stopped waiting.
     cloud.then(() => {
       if (this._armed && gen === this._generation) this._loadWindows(gen).catch(() => {});
     });
@@ -140,12 +109,9 @@ class TimingSkipper {
     this._listenForNewTracks();
     this._startCueChangeListeners();
 
-    // Check immediately — video may already be inside a known window
-    // (e.g. arm() called mid-episode or after a SPA navigation).
-    this._tick();
+    this._tick(); // may already be inside a window (armed mid-episode)
 
-    // Schedule AI subtitle scans with back-off — .vtt subtitle files load
-    // asynchronously; an immediate scan often finds nothing. Retry at 10 s and 30 s.
+    // .vtt files load async, so an immediate scan usually finds nothing.
     if (!this._windows.length) {
       this._doAISubtitleScan();
       setTimeout(() => { if (this._armed && !this._windows.length) this._doAISubtitleScan(); }, 10_000);
@@ -155,15 +121,14 @@ class TimingSkipper {
 
   disarm() {
     this._armed = false;
-    // Invalidate anything still in flight so it cannot write into a later arm().
-    this._generation++;
+    this._generation++; // invalidate in-flight loads
+
     this._detachListeners();
     if (this._windowRefreshTimer) { clearInterval(this._windowRefreshTimer); this._windowRefreshTimer = null; }
     if (this._trackListener && this._video) {
       try { this._video.textTracks.removeEventListener('addtrack', this._trackListener); } catch {}
       this._trackListener = null;
     }
-    // Clean up all cuechange listeners
     for (const [track, handler] of this._cueChangeHandlers) {
       try { track.removeEventListener('cuechange', handler); } catch {}
     }
@@ -176,6 +141,7 @@ class TimingSkipper {
     this._epKey       = null;
     this._onNearEnd   = null;
     this._pendingVerify = null;
+    this._lastPlayTime  = null;
     this._skippedTypes.clear();
     this._hintedTypes.clear();
     this._rejectedTypes.clear();
@@ -185,9 +151,8 @@ class TimingSkipper {
   }
 
   /**
-   * Register a window observed live in this playback (SignalCollector: XHR data,
-   * chapter DOM, button lifecycle). Unlike windows that come back out of the
-   * store, these count as evidence for the episode on screen and may fire a jump.
+   * Window observed live in this playback (SignalCollector: XHR, chapter DOM,
+   * button lifecycle). Counts as evidence, so it may fire a jump on its own.
    */
   addLocalWindow(type, from, to, source = 'signal:unknown') {
     if (!this._armed) return;
@@ -213,13 +178,8 @@ class TimingSkipper {
   }
 
   /**
-   * Perform a skip the user confirmed through the HUD hint button.
-   *
-   * The hint stays on screen for several seconds, so by the time it is clicked
-   * the playhead may have moved well past the window — assigning `win.to` blindly
-   * would then yank the user backwards. Validate before moving.
-   *
-   * @returns {boolean} whether the jump was performed
+   * Skip confirmed by the user via the HUD hint. The hint lives for seconds, so
+   * the playhead may have moved on — validate before jumping, or we rewind them.
    */
   confirmSkip(win) {
     const video = this._video || document.querySelector('video');
@@ -229,16 +189,14 @@ class TimingSkipper {
     if (t < win.from - 30) return false; // user moved far away — stale hint
     this._skippedTypes.add(win.type);
     this._seekTo(video, win.to);
+
+    // Strongest signal available: a human confirmed this exact moment. Worth
+    // sharing, unlike a silent scrub.
+    this._persist(win.type, Math.round(win.from), Math.round(win.to), 'hint-confirmed');
     return true;
   }
 
-  /**
-   * Undo a skip we just performed, and record that it was unwanted.
-   * Refuses when the user has since moved elsewhere — rewinding them to a
-   * position from a minute ago is worse than doing nothing.
-   *
-   * @returns {boolean} whether the rewind was performed
-   */
+  /** Undo our jump and penalise the window. No-op if the user has moved on. */
   undoSkip(win) {
     const video = this._video || document.querySelector('video');
     if (!video || win?._undoTime == null) return false;
@@ -248,11 +206,7 @@ class TimingSkipper {
     return stillWhereWeLanded;
   }
 
-  /**
-   * Hard rejection from the user (HUD undo, or a seek back into the window).
-   * Removes the window for the rest of this episode and penalises it in the
-   * store so the same phantom skip does not come back next episode.
-   */
+  /** Drop the window for this episode and penalise it so it stops coming back. */
   rejectWindow(win) {
     if (!win) return;
     this._rejectedTypes.add(win.type);
@@ -267,15 +221,6 @@ class TimingSkipper {
   async onButtonClick() {
     if (!this._armed) return;
     await this._loadWindows();
-    this._tick();
-  }
-
-  // Called by SignalCollector after recording a new window — triggers an immediate
-  // window refresh so auto-skip fires without waiting for the 30-s interval.
-  async notifyNewWindow() {
-    if (!this._armed) return;
-    await this._loadWindows();
-    if (!this._tickHandler && this._windows.length) this._attachListeners();
     this._tick();
   }
 
@@ -688,21 +633,23 @@ class TimingSkipper {
   }
 
   /**
-   * The user finished a seek. Two consequences:
+   * The user finished a seek. Three consequences:
    *   - landing back inside something we cut away is a rejection
    *   - landing inside a known window means they chose that position on
    *     purpose, so we must not drag them out of it
+   *   - jumping *over* something is the user showing us where a segment is
    */
   _onSeeked() {
     const video = this._video;
     if (!video || this._isSelfSeek()) return;
+    const departed = this._lastPlayTime;
     this._lastUserSeek = Date.now();
     this._checkSeekBack();
 
     // Players seek on their own while starting up — restoring a "continue
     // watching" position, settling after the manifest loads. That is not the
     // user choosing a spot, so it must not suppress the first skip.
-    if (Date.now() - this._armedAt < 4000) return;
+    if (Date.now() - this._armedAt < 4000) { this._lastPlayTime = video.currentTime; return; }
 
     const t = video.currentTime;
     for (const win of this._windows) {
@@ -710,6 +657,56 @@ class TimingSkipper {
         this._userPlaced.set(win.type, { from: win.from, to: win.to });
       }
     }
+
+    this._learnFromManualSkip(departed, t, video);
+    // Chain: a second seek must be measured from where the first one landed,
+    // not from the last position playback actually reached.
+    this._lastPlayTime = t;
+  }
+
+  /**
+   * A forward jump is the user showing us where a segment is — the only signal
+   * available on platforms with neither buttons nor chapter data.
+   *
+   * No need to tell a real intro from a boring scene: the jump is stored against
+   * its episode, and predictWindow() needs several *different* episodes to agree
+   * before a prior clears the hint threshold. Repetition is the filter.
+   */
+  _learnFromManualSkip(departed, landed, video) {
+    if (!this._seriesKey) return;
+    if (!Number.isFinite(departed) || !Number.isFinite(landed)) return;
+
+    const gap = landed - departed;
+    // Too short to be a segment, too long to be anything but navigation.
+    if (gap < 15 || gap > 400) return;
+
+    const dur = video.duration;
+    if (!Number.isFinite(dur) || dur <= 0) return;
+
+    // Position decides which segment the user was escaping. Anything in the
+    // middle of an episode has no segment meaning, so it is left alone.
+    let type = null;
+    if (departed <= Math.max(600, dur * 0.35))      type = 'intro';
+    else if (departed >= dur * 0.60)                type = 'credits';
+    if (!type) return;
+    if (!this._typeAllowed(type)) return;
+
+    // Already covered by something we detected ourselves — no need to relearn it,
+    // and a live window is more precise than a hand-made jump.
+    const known = this._windows.find(w => w.type === type
+      && departed >= w.from - 20 && departed <= w.to + 20);
+    if (known?.local) return;
+
+    const from = Math.round(departed);
+    const to   = Math.round(landed);
+    const meta = { epKey: this._epKey || null, duration: dur };
+    // Local only. Hand-made jumps are noisier than platform data, and one
+    // person's scrub past a slow scene should not become a skip window for
+    // everyone else watching the series.
+    learningStore.recordTimingWindow(this._seriesKey, type, from, to, 1, meta);
+    if (this._epKey) learningStore.recordTimingWindow(this._epKey, type, from, to, 1, meta);
+
+    console.info(`[SmartSkip timing] learned manual ${type} skip ${from}→${to}s (local only)`);
   }
 
   // Periodically re-load timing windows for the first 5 min after arming.
@@ -726,14 +723,9 @@ class TimingSkipper {
     }, 30_000);
   }
 
-  // ── Real-time cuechange tracking ─────────────────────────────────────────
-  //
-  // Attaches `cuechange` to every text track on the video element.  When a
-  // cue whose text matches a skip-type keyword becomes *active*, we record
-  // `from = currentTime`.  When it goes *inactive* we close the window and
-  // persist it immediately — no button click needed, no polling delay.
-  // This is the highest-precision source for tracks that actually label their
-  // cues (Netflix, Apple TV+, many anime platforms).
+  // Highest-precision source where tracks label their cues (Netflix, Apple TV+,
+  // most anime platforms): window opens when a matching cue goes active, closes
+  // when it goes inactive. No polling, no button.
   _startCueChangeListeners() {
     const video = this._video;
     if (!video) return;
@@ -858,6 +850,14 @@ class TimingSkipper {
     const video = this._video;
     if (!video || video.paused || !this._armed) return;
 
+    // Where playback actually reached, so a later seek can be measured against
+    // it. Skipped while a seek is in flight: `timeupdate` also fires during
+    // seeking, and letting it through would overwrite the pre-seek position with
+    // the post-seek one before _onSeeked ever sees it.
+    if (!video.seeking && Date.now() - this._lastUserSeek > 400) {
+      this._lastPlayTime = video.currentTime;
+    }
+
     // don't act within 15 s of a manual seek — user is navigating intentionally
     if (Date.now() - this._lastUserSeek < 15_000) return;
 
@@ -919,11 +919,7 @@ class TimingSkipper {
     return ev.ok ? Math.min(0.97, win.confidence + SS_CORROB_BOOST) : win.confidence;
   }
 
-  /**
-   * Live confirmation that the remembered segment is really on screen.
-   * Synchronous — runs inside the `timeupdate` handler.
-   * @returns {{ok: boolean, reason: string}}
-   */
+  /** Live proof the remembered segment is on screen. Sync: runs in timeupdate. */
   _corroborate(win) {
     // 1. The platform itself says so (chapter/marker data for this episode).
     try {
@@ -1051,7 +1047,6 @@ class TimingSkipper {
     if (!(win.to > video.currentTime + 1)) return;
 
     this._skippedTypes.add(win.type);
-    const fromTime     = video.currentTime;
     const origDuration = Math.round(video.duration || 0);
     this._seekTo(video, win.to);
 

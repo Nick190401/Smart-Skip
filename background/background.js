@@ -2,25 +2,14 @@
  * Smart Skip v2 — Background Service Worker (MV3)
  */
 
-// Shared credentials — git-ignored local file, never committed.
-// Clone setup: git update-index --skip-worktree content/config.js
-// then fill in apiBase + apiKey.
+importScripts('../shared/defaults.js');
+
+// Credentials live in a git-ignored file; missing on a fresh clone.
 try { importScripts('../content/config.js'); } catch (_) {
-  // Fallback so the extension doesn't crash before config.js is set up.
   self.SS2_CONFIG = { apiBase: '', apiKey: '' };
 }
 
-const VERSION = '2.0.0';
-
-const DEFAULTS = {
-  globalEnabled: true,
-  hudEnabled: true,
-  badgeEnabled: true,
-  verboseLogging: false,
-  domains: {},
-  series: {},
-  episodes: {},
-};
+const DEFAULTS = ss2Defaults();
 
 // ── Install / Update ─────────────────────────────────────────────────────────
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {

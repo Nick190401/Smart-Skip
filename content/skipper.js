@@ -443,6 +443,10 @@ class SmartSkipV2 {
       const video = document.querySelector('video');
       const batchContext = {
         videoTime: video && !isNaN(video.currentTime) ? video.currentTime : null,
+        // Position alone says nothing without the total — "1200s in" is the end
+        // of a 21-minute episode and the first third of a feature.
+        duration:  video && Number.isFinite(video.duration) && video.duration > 0
+                     ? video.duration : null,
         series:    this.currentSeries?.title   || null,
         episode:   this.currentSeries?.episode || null,
       };
@@ -462,6 +466,7 @@ class SmartSkipV2 {
           : (trusted ? 0.45 : 0.55);
         if (!result || result.type === 'none' || result.confidence < threshold) continue;
         if (!this._typeAllowed(result.type, seriesSettings)) continue;
+        if (!this._positionAllows(result.type, video)) continue;
         this._click(allButtons[i], result);
         return;
       }
@@ -880,7 +885,6 @@ class SmartSkipV2 {
     const _type        = result.type;
     const _src         = result.source;
     const _t0          = videoTime;
-    const _buttonFrom  = buttonFrom;    // button appear time (= segment start)
     const _timingFrom  = timingFrom;    // best available segment start
     const _duration    = video?.duration ?? null;  // capture before possible navigation
     setTimeout(() => {
@@ -1004,20 +1008,9 @@ class SmartSkipV2 {
 
   //  Settings
 
-  _defaultSettings() {
-    return {
-      globalEnabled: true,
-      hudEnabled: true,
-      verboseLogging: false,
-      domains: {},
-      series: {},
-      episodes: {},   // per-episode overrides
-    };
-  }
+  _defaultSettings()       { return ss2Defaults(); }
 
-  _defaultSeriesSettings() {
-    return { skipIntro: true, skipRecap: true, skipCredits: true, skipAds: true, autoNext: false };
-  }
+  _defaultSeriesSettings() { return ss2SeriesDefaults(); }
 
   _seriesKey(title) {
     return `${location.hostname}:${title}`;
@@ -1060,6 +1053,33 @@ class SmartSkipV2 {
 
     // Episode override: only apply fields that were explicitly set
     return epSettings ? { ...base, ...epSettings } : base;
+  }
+
+  /**
+   * Settings say *whether* an action is wanted, never *when*. Prime keeps its
+   * next-episode button mounted all episode, so without this it fired the moment
+   * it was classified.
+   *
+   * Only next/credits are gated. Intro, recap and ads buttons appear only while
+   * their segment runs, so their presence is the evidence.
+   */
+  _positionAllows(type, video) {
+    if (type !== 'next' && type !== 'credits') return true;
+
+    const dur = video?.duration;
+    const t   = video?.currentTime;
+    if (!Number.isFinite(dur) || dur <= 0 || !Number.isFinite(t)) {
+      // Unknown length (live stream, manifest not parsed yet). Skipping credits
+      // is harmless; jumping to a next episode we cannot locate the end of is not.
+      return type !== 'next';
+    }
+
+    if (type === 'next') {
+      if (video.ended) return true;
+      return (dur - t) <= Math.max(90, dur * 0.08);
+    }
+    // credits
+    return t >= dur * 0.6;
   }
 
   _typeAllowed(type, s) {
@@ -1153,7 +1173,6 @@ class SmartSkipV2 {
       .ss-badge--rule { background: #0284c7; }
       .ss-badge--off  { background: rgba(255,255,255,.15); color: #aaa; }
       .ss-badge--skip { background: #16a34a; animation: ss-pop .3s ease; }
-      .ss-badge--hint { background: #b45309; }
       .ss-undo {
         padding: 2px 8px;
         border-radius: 10px;

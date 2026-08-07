@@ -91,18 +91,8 @@ const POPUP_BLOCKED_DOMAINS = new Set([
   'music.youtube.com',
 ]);
 
-const DEFAULTS = {
-  globalEnabled: true,
-  hudEnabled: true,
-  badgeEnabled: true,
-  domains: {},
-  series: {},
-  episodes: {},
-};
-
-const SERIES_DEFAULTS = {
-  skipIntro: true, skipRecap: true, skipCredits: true, skipAds: true, autoNext: false,
-};
+const DEFAULTS        = ss2Defaults();
+const SERIES_DEFAULTS = ss2SeriesDefaults();
 
 // Init
 (async function init() {
