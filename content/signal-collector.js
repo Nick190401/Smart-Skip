@@ -39,6 +39,7 @@ class SignalCollector {
     // XHR/fetch bridge
     this._messageHandler = null;
     this._injected       = false;
+    this._nonce          = null;  // shared secret with the page-context interceptor
 
     // chapter DOM polling
     this._chapterPollTimer = null;
@@ -85,6 +86,22 @@ class SignalCollector {
 
   // ── A. Fetch / XHR interceptor (page-context bridge) ─────────────────────
 
+  /**
+   * Shared secret between this content script and the page-context interceptor.
+   * Generated once per page load; the interceptor echoes it on every message and
+   * we drop anything that does not carry it. Without this, any script running on
+   * the page could post a `__ss2_net__` message and have arbitrary timing windows
+   * recorded as genuine observations — and uploaded to the shared database.
+   */
+  _ensureNonce() {
+    if (!this._nonce) {
+      const b = new Uint8Array(16);
+      crypto.getRandomValues(b);
+      this._nonce = [...b].map(x => x.toString(16).padStart(2, '0')).join('');
+    }
+    return this._nonce;
+  }
+
   _injectPageScript() {
     if (this._injected) return;
     this._injected = true;
@@ -93,7 +110,10 @@ class SignalCollector {
       // script.textContent — inline scripts are blocked by strict CSP on sites
       // like Paramount+, Max, Hulu, etc. Extension-origin src URLs are allowed.
       const script = document.createElement('script');
-      script.src = chrome.runtime.getURL('content/page-interceptor.js');
+      // Nonce travels in the fragment: never sent anywhere, readable by the
+      // script itself via document.currentScript.src.
+      script.src = chrome.runtime.getURL('content/page-interceptor.js')
+                 + '#ss2=' + this._ensureNonce();
       // Remove after execution so DevTools isn't cluttered
       script.addEventListener('load',  () => script.remove(), { once: true });
       script.addEventListener('error', () => script.remove(), { once: true });
@@ -102,8 +122,15 @@ class SignalCollector {
   }
 
   _startMessageBridge() {
+    const nonce = this._ensureNonce();
     this._messageHandler = (ev) => {
-      if (!ev.data?.__ss2_net__ || !this._armed) return;
+      if (!this._armed) return;
+      // Must come from this window, this origin, and carry our per-load nonce.
+      // Any of these missing means a page script is talking to us, not our own
+      // interceptor — and its "timing data" would end up in the crowd database.
+      if (ev.source !== window) return;
+      if (ev.origin !== location.origin && ev.origin !== 'null') return;
+      if (ev.data?.__ss2_net__ !== nonce) return;
       this._processNetworkData(ev.data.data, ev.data.url || '');
     };
     window.addEventListener('message', this._messageHandler);
@@ -669,16 +696,22 @@ class SignalCollector {
     if (this._recordedWindows.has(dedupKey)) return;
     this._recordedWindows.add(dedupKey);
 
-    learningStore.recordTimingWindow(this._seriesKey, type, from, to);
-    if (this._epKey) learningStore.recordTimingWindow(this._epKey, type, from, to);
+    // Attribute the observation to the episode it came from. Without the epKey
+    // the series bucket cannot tell three episodes agreeing apart from one
+    // episode reported three times — the difference between a real pattern and
+    // a phantom one.
+    const meta = { epKey: this._epKey || null, duration: document.querySelector('video')?.duration };
+    learningStore.recordTimingWindow(this._seriesKey, type, from, to, 1, meta);
+    if (this._epKey) learningStore.recordTimingWindow(this._epKey, type, from, to, 1, meta);
 
     syncService.recordTimingWindow(this._seriesKey, type, from, to, source);
     if (this._epKey) syncService.recordTimingWindow(this._epKey, type, from, to, source);
 
     console.info(`[SmartSkip signal] ${type} ${from}→${to}s (${source})`);
-    // Notify TimingSkipper immediately so it can auto-skip without waiting
-    // for the 30-s periodic window-refresh interval.
-    timingSkipper?.notifyNewWindow?.().catch?.(() => {});
+    // Hand the window to TimingSkipper as *live* evidence for this episode —
+    // going through the store would come back tagged as series memory and then
+    // need corroboration it already has.
+    timingSkipper?.addLocalWindow?.(type, from, to, `signal:${source}`);
   }
 }
 

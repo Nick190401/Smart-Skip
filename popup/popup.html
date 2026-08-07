@@ -140,6 +140,10 @@ main { padding: 0 14px; }
 .timing-chip.credits::before { background: #a78bfa; }
 .timing-chip.ads     { color: #f87171; border-color: rgba(248,113,113,.25);  background: rgba(248,113,113,.08); }
 .timing-chip.ads::before     { background: #f87171; }
+/* Guessed from other episodes — shown dimmed and dashed so a prediction is
+   never mistaken for a timing confirmed in the episode being watched. */
+.timing-chip.guess           { opacity: .55; border-style: dashed; }
+.timing-chip.guess::before   { opacity: .5; }
 
 /* ── Stats bar ─────────────────────────────────────────── */
 .stats-bar { display: flex; gap: 7px; margin-top: 7px; }

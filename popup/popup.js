@@ -3,6 +3,26 @@
 // DOM refs
 const $ = id => document.getElementById(id);
 
+// ── Escaping for server-supplied content ─────────────────────────────────────
+// Announcements, maintenance notices, quick actions and broadcasts all come from
+// the admin API and are rendered through innerHTML. Interpolating them raw let
+// anything that could write to those fields inject markup into the popup —
+// overlays, spoofed prompts, links pointing anywhere. The MV3 default CSP stops
+// injected script from running, but not the markup itself, and the popup is the
+// surface where the user makes trust decisions.
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+));
+
+/** Allow only ordinary web links; anything else (javascript:, data:) becomes inert. */
+const safeUrl = (u) => {
+  try {
+    const parsed = new URL(String(u ?? ''), 'https://invalid.example');
+    return (parsed.protocol === 'https:' || parsed.protocol === 'http:')
+      ? esc(parsed.href) : '#';
+  } catch { return '#'; }
+};
+
 const el = {
   domain:        $('domain-label'),
   aiBadge:       $('ai-badge'),
@@ -492,7 +512,7 @@ const SERIES_DEFAULTS = {
               if (txt) {
                 announcementBar.innerHTML =
                   `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 4.01c-1 .49-1.98.689-3 .99-1.121-1.265-2.783-1.337-4.38-.491-1.597.845-2.32 2.78-1.62 4.491.075.204.074.423-.019.616C11.36 11.88 8.5 13 5 12c0 0 4 3 3 6l1.5.5C10 16.286 14 15 16.5 16c2.5 1 5.5-2.5 5.5-6 0-1.021-.225-1.99-.628-2.868A1.013 1.013 0 0 1 21.5 6C21.5 5 22 4.5 22 4.01z"/><path d="M3 15.5l-1.5 4.5"/></svg>
-                  <span>${txt}</span>`;
+                  <span>${esc(txt)}</span>`;
                 announcementBar.style.display = 'flex';
               }
             }
@@ -511,7 +531,7 @@ const SERIES_DEFAULTS = {
                 }
                 maintBanner.innerHTML =
                   `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-                  <div><div class="maint-msg">${maintMsg}</div>${timeHtml}</div>`;
+                  <div><div class="maint-msg">${esc(maintMsg)}</div>${timeHtml}</div>`;
                 maintBanner.style.display = 'flex';
               }
             }
@@ -520,7 +540,8 @@ const SERIES_DEFAULTS = {
             const qaBar = document.getElementById('quick-actions-bar');
             if (qaBar && data.quick_actions?.length) {
               qaBar.innerHTML = data.quick_actions.map(qa =>
-                `<a href="${qa.url}" target="_blank" rel="noopener"><span class="qa-icon">${qa.icon || '\uD83D\uDD17'}</span>${qa.label}</a>`
+                `<a href="${safeUrl(qa.url)}" target="_blank" rel="noopener noreferrer">`
+                + `<span class="qa-icon">${esc(qa.icon || '\uD83D\uDD17')}</span>${esc(qa.label)}</a>`
               ).join('');
               qaBar.style.display = 'flex';
             }
@@ -548,20 +569,22 @@ const SERIES_DEFAULTS = {
           banner.innerHTML = broadcasts.map(bc => {
             const color = typeColor[bc.type] || typeColor.info;
             const bg    = typeBg[bc.type]    || typeBg.info;
+            // typeIcon values are our own literals; everything reached through
+            // `bc.*` is server-supplied and must be escaped.
             const iconHtml = bc.icon_override
-              ? `<span style="font-size:14px;line-height:1">${bc.icon_override}</span>`
+              ? `<span style="font-size:14px;line-height:1">${esc(bc.icon_override)}</span>`
               : (typeIcon[bc.type] || typeIcon.info);
             const linkHtml = bc.link_url
-              ? `<a class="bc-link" href="${bc.link_url}" target="_blank" rel="noopener" style="color:${color}">${bc.link_text?.trim() || i18n.t('broadcastMore')} \u2192</a>`
+              ? `<a class="bc-link" href="${safeUrl(bc.link_url)}" target="_blank" rel="noopener noreferrer" style="color:${color}">${esc(bc.link_text?.trim() || i18n.t('broadcastMore'))} \u2192</a>`
               : '';
             const dismissHtml = bc.dismissible
-              ? `<button class="bc-dismiss" data-bc-id="${bc.id}">&times; ${i18n.t('broadcastDismiss')}</button>`
+              ? `<button class="bc-dismiss" data-bc-id="${esc(bc.id)}">&times; ${esc(i18n.t('broadcastDismiss'))}</button>`
               : '';
             return `<div class="bc-item" style="border-left-color:${color};background:${bg}">
               <span class="bc-icon" style="color:${color}">${iconHtml}</span>
               <div class="bc-body">
-                <div class="bc-title" style="color:${color}">${bc.title}</div>
-                <div class="bc-text">${bc.body}</div>
+                <div class="bc-title" style="color:${color}">${esc(bc.title)}</div>
+                <div class="bc-text">${esc(bc.body)}</div>
                 ${linkHtml}${dismissHtml}
               </div>
             </div>`;
@@ -673,7 +696,10 @@ async function loadInsights() {
 }
 
 function insRow(label, selector, meta, scoreClass) {
-  const esc = s => s.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // Uses the module-level esc(). The local helper this replaced escaped only
+  // < and >, while `selector` is interpolated into a title="" attribute — and
+  // selectors arrive from the crowd-sourced selector API, so a quote in one was
+  // enough to break out of the attribute and add attributes of its own.
   return `<div class="insight-row">
     <div class="insight-score ${scoreClass}"></div>
     <span class="insight-meta" style="min-width:56px;color:var(--text)">${esc(label)}</span>
@@ -832,13 +858,25 @@ function _renderTimingChips(status) {
     const m = Math.floor(s / 60), sec = Math.round(s % 60);
     return `${m}:${String(sec).padStart(2, '0')}`;
   };
+  // 'series' windows are remembered from *other* episodes. They only auto-skip
+  // when something in the player confirms them live, so mark them as guesses
+  // instead of presenting them like confirmed timings.
+  const TIER_NOTE = {
+    live:    'in dieser Folge best\u00e4tigt',
+    episode: 'aus dieser Folge gelernt',
+    series:  'aus anderen Folgen geraten \u2013 \u00fcberspringt nur mit Best\u00e4tigung im Player',
+  };
   el.timingChips.innerHTML = status.windows
     .filter(w => w.confidence >= 0.50)
     .sort((a, b) => a.from - b.from)
     .map(w => {
-      const src = w.count > 1 ? ` \u00b7 ${w.count}\u00d7` : '';
-      return `<span class="timing-chip ${w.type}" title="Konfidenz: ${Math.round(w.confidence * 100)}%${src}">`
-           + `${LABELS[w.type] ?? w.type} ${fmt(w.from)}\u2013${fmt(w.to)}`
+      const src   = w.count > 1 ? ` \u00b7 ${w.count}\u00d7` : '';
+      const tier  = w.tier || 'live';
+      const guess = tier === 'series';
+      const note  = TIER_NOTE[tier] ?? '';
+      return `<span class="timing-chip ${w.type}${guess ? ' guess' : ''}" `
+           + `title="Konfidenz: ${Math.round(w.confidence * 100)}%${src}\n${note}">`
+           + `${LABELS[w.type] ?? w.type} ${fmt(w.from)}\u2013${fmt(w.to)}${guess ? ' ?' : ''}`
            + `</span>`;
     }).join('');}
 

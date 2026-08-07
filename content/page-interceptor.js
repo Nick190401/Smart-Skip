@@ -11,18 +11,44 @@
  * that blocks inline scripts — but extension-origin script src URLs are allowed.
  *
  * Communication back to the content script:
- *   window.postMessage({ __ss2_net__: true, data: <object>, url: <string> }, '*')
+ *   window.postMessage({ __ss2_net__: <nonce>, data: <object>, url: <string> },
+ *                      location.origin)
+ *
+ * The nonce is generated per page load by the content script and handed over in
+ * this script's own src query string. It serves both directions:
+ *
+ *   - the content script rejects any message without it, so a script on the page
+ *     cannot forge network payloads. Forged payloads used to be recorded as
+ *     genuine timing windows and uploaded to the shared timing database, which
+ *     let any site poison skip data for every user of a series.
+ *
+ *   - responses are only forwarded when they actually look like timing data.
+ *     Posting every JSON body the platform receives handed the site's own API
+ *     responses — account data, tokens, viewing history — to every third-party
+ *     script listening for `message` events, and cost a full parse of every
+ *     response on the page.
  */
 
 (function () {
   if (window.__ss2_intercepted__) return;
   window.__ss2_intercepted__ = true;
 
+  const NONCE = (document.currentScript?.src || '').split('#ss2=')[1] || '';
+  if (!NONCE) return; // no nonce → not our injection, stay out of the page
+
+  // Responses worth forwarding mention a segment boundary in some form. Anything
+  // else is the platform's own business and must not leave the page.
+  const RELEVANT = /"?(intro|recap|credits?|outro|opening|ending|skip|chapter|marker|segment|cue|advert|adBreak|timeline|startTime|endTime|startOffset|endOffset)"?\s*[:=]/i;
+  const MAX_BYTES = 512 * 1024; // larger bodies are manifests or media, never timings
+
   function tryPost(text, url) {
+    if (typeof text !== 'string') return;
+    if (text.length < 10 || text.length > MAX_BYTES) return;
+    if (!RELEVANT.test(text)) return;
     try {
       const d = JSON.parse(text);
       if (d && typeof d === 'object') {
-        window.postMessage({ __ss2_net__: true, data: d, url: url }, '*');
+        window.postMessage({ __ss2_net__: NONCE, data: d, url: url }, location.origin);
       }
     } catch (_) {}
   }
@@ -31,11 +57,20 @@
   const _origFetch = window.fetch.bind(window);
   window.fetch = function (...args) {
     return _origFetch(...args).then(res => {
-      const clone = res.clone();
-      const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
-      clone.text()
+      try {
+        // Only clone what could possibly be a timing payload. Cloning every
+        // response and decoding it to text doubled the buffering for media
+        // segments and manifests — megabytes per second during playback.
+        const ct  = res.headers?.get?.('content-type') || '';
+        const len = +(res.headers?.get?.('content-length') || 0);
+        if (!/json|javascript|text\/plain/i.test(ct)) return res;
+        if (len > MAX_BYTES) return res;
+
+        const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+        res.clone().text()
            .then(t => tryPost(t, reqUrl))
            .catch(() => {});
+      } catch (_) {}
       return res;
     });
   };

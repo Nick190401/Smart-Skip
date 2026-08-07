@@ -153,33 +153,86 @@ class LearningStore {
    * Record an exact skip window {from, to} discovered by signal-collector.
    * Windows from multiple independent sessions are merged — overlapping ones
    * are kept as separate entries so predictWindow() can pick the dominant cluster.
-   */
-  /**
+   *
+   * Observations are bucketed *per episode* rather than averaged into one blurred
+   * range. Averaging across episodes was the root cause of phantom skips: an intro
+   * at 62 s in episode 1 and at 95 s in episode 3 collapsed into a single 78 s
+   * window that matched neither, while `count` — and therefore confidence — kept
+   * climbing. predictWindow() now derives the series prior from the median across
+   * *distinct* episodes and can see how far they actually disagree.
+   *
    * @param {number} [initialCount=1]  Pass server-reported count when
    *   storing a window received from fetchTimings so that confidence
    *   reflects how many devices contributed, not just 1.
+   * @param {object} [meta]            { epKey, duration, server }
+   *   epKey    — episode this observation came from; observations without one
+   *              cannot prove episode diversity and are pooled under '_unknown'.
+   *   duration — video.duration at observation time, used to reject a prior
+   *              whose episode had a very different length.
    */
-  async recordTimingWindow(seriesKey, type, from, to, initialCount = 1) {
+  async recordTimingWindow(seriesKey, type, from, to, initialCount = 1, meta = {}) {
     await this._ensureLoaded();
     if (!this._data.windows[seriesKey])       this._data.windows[seriesKey] = {};
     if (!this._data.windows[seriesKey][type]) this._data.windows[seriesKey][type] = [];
 
-    const list = this._data.windows[seriesKey][type];
+    from = Math.round(from);
+    to   = Math.round(to);
+    if (!(to > from)) return;
+
+    const list  = this._data.windows[seriesKey][type];
+    const epId  = meta.server ? '_server' : (meta.epKey || '_unknown');
+    const dur   = Number.isFinite(meta.duration) && meta.duration > 0 ? Math.round(meta.duration) : null;
+
     // check if this window merges with an existing one (within 20 s tolerance)
-    const existing = list.find(w => Math.abs(w.from - from) <= 20 && Math.abs(w.to - to) <= 20);
-    if (existing) {
-      // refine bounds toward the new values; take the higher count
-      // (server count already aggregates many devices, don't double-add)
-      const newCount = Math.max(existing.count + 1, initialCount);
-      existing.from  = Math.round((existing.from * existing.count + from * initialCount) / (existing.count + initialCount));
-      existing.to    = Math.round((existing.to   * existing.count + to   * initialCount) / (existing.count + initialCount));
-      existing.count = newCount;
-      existing.ts    = Date.now();
-    } else {
-      list.push({ from, to, count: initialCount, ts: Date.now() });
+    let entry = list.find(w => Math.abs(w.from - from) <= 20 && Math.abs(w.to - to) <= 20);
+    if (!entry) {
+      entry = { from, to, count: 0, eps: {}, rejects: 0, ts: Date.now() };
+      list.push(entry);
       if (list.length > 20) list.shift(); // keep last 20 unique windows
     }
+    if (!entry.eps) entry.eps = {};       // migrate v1 entries written before this change
+
+    const ep = entry.eps[epId] || { from, to, dur, n: 0, ts: 0 };
+    // Within one episode, refine toward the newest observation. Across episodes
+    // nothing is averaged — each episode keeps its own bounds.
+    ep.from = Math.round((ep.from * ep.n + from) / (ep.n + 1));
+    ep.to   = Math.round((ep.to   * ep.n + to)   / (ep.n + 1));
+    ep.n    = epId === '_server' ? Math.max(ep.n + 1, initialCount) : ep.n + 1;
+    if (dur) ep.dur = dur;
+    ep.ts   = Date.now();
+    entry.eps[epId] = ep;
+
+    entry.count = Math.max((entry.count || 0) + 1, initialCount);
+    entry.ts    = Date.now();
+    this._recomputeWindowBounds(entry);
     this._scheduleSave();
+  }
+
+  /** Median from/to across the distinct episodes that observed this window. */
+  _recomputeWindowBounds(entry) {
+    const eps = Object.values(entry.eps || {});
+    if (!eps.length) return;
+    const med = (arr) => {
+      const s = [...arr].sort((a, b) => a - b);
+      return Math.round(s[Math.floor(s.length / 2)]);
+    };
+    entry.from = med(eps.map(e => e.from));
+    entry.to   = med(eps.map(e => e.to));
+  }
+
+  /** Stats used by predictWindow to decide how much a window can be trusted. */
+  _windowStats(entry) {
+    const eps    = Object.values(entry.eps || {});
+    // '_unknown' and '_server' pool many sources under one id — they prove no
+    // episode diversity, so they count as a single episode each.
+    const nEps   = eps.length || 1;
+    const froms  = eps.map(e => e.from);
+    const spread = froms.length > 1 ? Math.max(...froms) - Math.min(...froms) : 0;
+    const durs   = eps.map(e => e.dur).filter(d => Number.isFinite(d) && d > 0);
+    const medDur = durs.length
+      ? [...durs].sort((a, b) => a - b)[Math.floor(durs.length / 2)]
+      : null;
+    return { nEps, spread, medDur, rejects: entry.rejects || 0 };
   }
 
   /**
@@ -195,6 +248,31 @@ class LearningStore {
     if (idx === -1) return;
     list[idx].count = Math.max(0, (list[idx].count ?? 1) - 2);
     if (list[idx].count === 0) list.splice(idx, 1);
+    this._scheduleSave();
+  }
+
+  /**
+   * Hard rejection: the user undid the skip or seeked back into the window.
+   * A rejection is far stronger evidence than a sighting — one wrong jump in
+   * episode 5 must outweigh three passive sightings in episodes 1-3, otherwise
+   * a bad series prior can never be unlearned.
+   *
+   * Each rejection halves the window's confidence; two rejections delete it.
+   */
+  async rejectTimingWindow(key, type, from, to, epKey = null) {
+    await this._ensureLoaded();
+    const list = this._data.windows?.[key]?.[type];
+    if (!list) return;
+    const idx = list.findIndex(w => Math.abs(w.from - from) <= 25 && Math.abs(w.to - to) <= 25);
+    if (idx === -1) return;
+    const entry = list[idx];
+    entry.rejects = (entry.rejects || 0) + 1;
+    // Drop this episode's contribution — it demonstrably does not hold here.
+    if (epKey && entry.eps?.[epKey]) {
+      delete entry.eps[epKey];
+      this._recomputeWindowBounds(entry);
+    }
+    if (entry.rejects >= 2 || !Object.keys(entry.eps || {}).length) list.splice(idx, 1);
     this._scheduleSave();
   }
 
@@ -223,39 +301,120 @@ class LearningStore {
 
   /**
    * Predict the skip window for a series/episode.
-   * Returns { from, to, confidence, source } or null if insufficient data.
+   * Returns { from, to, confidence, source, tier, nEps, spread, stable } or null.
    *
    * Priority:
    *   1. Exact windows from signal-collector (windows bucket) — highest confidence
    *   2. Server window from crowdsourced API (timings._server)
    *   3. Cluster of local point-in-time observations (timings._local / array)
+   *
+   * Everything returned here is *memory*, never live evidence. Series-tier
+   * predictions are therefore hard-capped at PRIOR_CAP, which sits below the
+   * caller's auto-skip threshold: a series prior can raise suspicion and drive a
+   * manual hint, but it can never fire a jump on its own. Only an episode-tier
+   * prediction (same episode, seen before) or live corroboration in the page
+   * gets past that line.
+   *
+   * @param {string} key                 series or episode key
+   * @param {string} buttonType
+   * @param {object} [ctx]
+   *   tier     — 'series' (default) or 'episode'
+   *   duration — current video.duration, used to reject priors recorded on
+   *              episodes of a very different length
    */
-  async predictWindow(seriesKey, buttonType) {
+  async predictWindow(key, buttonType, ctx = {}) {
     await this._ensureLoaded();
 
+    const tier     = ctx.tier === 'episode' ? 'episode' : 'series';
+    const duration = Number.isFinite(ctx.duration) && ctx.duration > 0 ? ctx.duration : null;
+
+    // Series memory alone must stay below the auto-skip threshold (0.65).
+    const PRIOR_CAP = 0.60;
+
+    // Applies agreement / spread / duration / rejection penalties and clamps
+    // to the tier cap.
+    const finish = (from, to, base, source, stats) => {
+      let conf   = base;
+      let stable = true;
+
+      // Episodes that disagree by more than 25 s describe different segments,
+      // not one segment seen repeatedly — exactly the "episode 5 is not episode
+      // 1-3" case. Such a prior may hint but must not drive a jump.
+      if (stats.nEps > 1 && stats.spread > 25) { conf *= 0.6; stable = false; }
+
+      // Disagreement larger than the ±20 s merge tolerance does not show up as
+      // spread at all — it produces a second window entry instead. So also weigh
+      // how many of the episodes we know about actually back the winning window.
+      // A series whose intro sits at 62 s in three episodes and at 150 s in two
+      // others is not a series with a reliable intro position.
+      if (stats.agreement != null && stats.agreement < 0.6) {
+        conf *= 0.5 + stats.agreement / 2; // 0.5 agreement → ×0.75, 0.25 → ×0.625
+        stable = false;
+      }
+
+      // A prior learned on 24-minute episodes says nothing about a 48-minute
+      // double episode or a recap special.
+      if (duration && stats.medDur && Math.abs(duration - stats.medDur) / stats.medDur > 0.15) {
+        conf *= 0.5;
+        stable = false;
+      }
+
+      // Each past rejection halves the trust.
+      if (stats.rejects) conf *= Math.pow(0.5, stats.rejects);
+
+      if (tier === 'series') conf = Math.min(conf, PRIOR_CAP);
+      if (conf < 0.25) return null;
+
+      return {
+        from, to,
+        confidence: +conf.toFixed(3),
+        source, tier,
+        nEps:      stats.nEps,
+        spread:    stats.spread,
+        agreement: stats.agreement ?? null,
+        stable,
+      };
+    };
+
     // 1. exact windows (from signal-collector: XHR/DOM/button-lifecycle)
-    const winList = this._data.windows?.[seriesKey]?.[buttonType];
+    const winList = this._data.windows?.[key]?.[buttonType];
     if (winList?.length) {
-      // dominant cluster: find window with most confirmed observations
-      const best = winList.reduce((a, b) => (b.count > a.count ? b : a));
-      const conf = best.count >= 5 ? 0.93
-                 : best.count >= 3 ? 0.87
-                 : best.count >= 2 ? 0.80
-                 : 0.72; // single observed window — still pretty reliable
-      return { from: best.from, to: best.to, confidence: conf, source: 'window' };
+      // Prefer the window backed by the most *distinct episodes*, not the one
+      // with the highest raw count — replaying one episode five times used to
+      // inflate count to 5 and buy 0.93 confidence for a single sighting.
+      const scored = winList
+        .map(w => ({ w, stats: this._windowStats(w) }))
+        .sort((a, b) => (b.stats.nEps - a.stats.nEps) || ((b.w.count || 0) - (a.w.count || 0)));
+      const { w: best, stats } = scored[0];
+
+      // Share of all episodes that have ever reported this segment type and
+      // back the winning window rather than a competing one.
+      const allEps = new Set();
+      for (const w of winList) for (const id of Object.keys(w.eps || {})) allEps.add(id);
+      stats.agreement = allEps.size > 1 ? stats.nEps / allEps.size : null;
+
+      const base = tier === 'episode'
+        // Same episode seen before: observations really are repeat sightings.
+        ? (best.count >= 3 ? 0.90 : best.count >= 2 ? 0.82 : 0.70)
+        // Series prior: only episode diversity counts.
+        : (stats.nEps >= 5 ? 0.60 : stats.nEps >= 3 ? 0.55 : stats.nEps >= 2 ? 0.45 : 0.35);
+
+      const out = finish(best.from, best.to, base, 'window', stats);
+      if (out) return out;
+      // fall through to the weaker buckets rather than returning nothing
     }
 
-    const bucket = this._data.timings[seriesKey]?.[buttonType];
+    const bucket = this._data.timings[key]?.[buttonType];
     if (!bucket) return null;
 
-    // server window — pre-computed from many devices, highest trust
+    // server window — aggregated across devices, but still series-wide memory
     if (bucket._server && bucket._server.samples >= 3) {
       const s = bucket._server;
-      const conf = s.samples >= 10 ? 0.92
+      const base = s.samples >= 10 ? 0.92
                  : s.samples >= 5  ? 0.85
-                 : s.samples >= 3  ? 0.75
-                 : 0.60;
-      return { from: s.from, to: s.to, confidence: conf, source: 'server' };
+                 : 0.75;
+      const out = finish(s.from, s.to, base, 'server', { nEps: 1, spread: 0, medDur: null, rejects: 0 });
+      if (out) return out;
     }
 
     // local observations — need at least 2
@@ -278,17 +437,18 @@ class LearningStore {
     const mid  = cluster[Math.floor(cluster.length / 2)];
     const pad  = Math.max(8, (max - min) * 0.4);
 
-    const conf = cluster.length >= 8 ? 0.88
+    const base = cluster.length >= 8 ? 0.88
                : cluster.length >= 5 ? 0.80
                : cluster.length >= 3 ? 0.72
                : 0.60;
 
-    return {
-      from:       Math.max(0, mid - pad),
-      to:         mid + pad + 10,
-      confidence: conf,
-      source:     'local',
-    };
+    return finish(
+      Math.max(0, mid - pad),
+      mid + pad + 10,
+      base,
+      'local',
+      { nEps: 1, spread: max - min, medDur: null, rejects: 0 },
+    );
   }
 
   /**

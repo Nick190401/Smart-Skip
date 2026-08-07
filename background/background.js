@@ -103,14 +103,14 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           break;
 
         case 'saveSettings':
-          await saveSettings(msg.settings);
+          await serialized(() => saveSettings(msg.settings));
           // Broadcast change to all streaming tabs so content scripts reload
           broadcastToStreamingTabs({ action: 'settingsUpdated' });
           respond({ ok: true });
           break;
 
         case 'seriesDetected':
-          await handleSeriesDetected(msg);
+          await serialized(() => handleSeriesDetected(msg));
           // Cache per tab so popup can retrieve reliably regardless of which frame detected the series
           if (sender.tab?.id) {
             chrome.storage.local.set({
@@ -124,12 +124,12 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           break;
 
         case 'buttonClicked':
-          await handleButtonClicked(msg);
+          await serialized(() => handleButtonClicked(msg));
           respond({ ok: true });
           break;
 
         case 'resetSeries':
-          await resetSeries(msg.seriesKey);
+          await serialized(() => resetSeries(msg.seriesKey));
           respond({ ok: true });
           break;
 
@@ -192,6 +192,21 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   return true; // async response
 });
 
+// ── Serialized storage access ────────────────────────────────────────────────
+// The content script runs in every frame (all_frames: true) of every streaming
+// tab, so several skips can be reported within milliseconds of each other. Every
+// handler below does read-modify-write on chrome.storage, which is not atomic:
+// concurrent handlers each read the same value, and the last write wins — the
+// other increments vanish. Funnelling all mutations through one promise chain
+// makes them run strictly one after another.
+let _writeChain = Promise.resolve();
+function serialized(fn) {
+  const run = () => fn();
+  const next = _writeChain.then(run, run);
+  _writeChain = next.catch(() => {});
+  return next;
+}
+
 // ── Handlers ─────────────────────────────────────────────────────────────────
 async function handleSeriesDetected({ series, domain }) {
   const cfg = await loadSettings();
@@ -219,6 +234,9 @@ async function handleButtonClicked({ buttonType, confidence, aiSource, series, d
   if (cfg.series[key]) {
     cfg.series[key].totalClicks = (cfg.series[key].totalClicks || 0) + 1;
     cfg.series[key].lastClickType = buttonType;
+    // Without this the counters were incremented on a throwaway object and lost:
+    // the per-series skip count never left this function.
+    await saveSettings(cfg);
   }
   // Save per-click stats in local storage (no sync quota concern)
   const now = Date.now();
@@ -265,28 +283,68 @@ async function resetSeries(seriesKey) {
 }
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Read settings, preferring whichever copy was written last.
+ *
+ * Preferring sync unconditionally meant that any sync write which silently
+ * lagged or failed made loadSettings serve older data than the local mirror we
+ * had just written — settings appeared to revert on their own.
+ */
 async function loadSettings() {
   try {
-    const sync  = (await chrome.storage.sync.get('ss2'))?.ss2;
-    const local = (await chrome.storage.local.get('ss2'))?.ss2;
-    const raw   = sync || local;
-    return raw ? { ...DEFAULTS, ...raw } : null;
+    const [syncRes, localRes] = await Promise.all([
+      chrome.storage.sync.get('ss2').catch(() => ({})),
+      chrome.storage.local.get('ss2').catch(() => ({})),
+    ]);
+    const sync  = syncRes?.ss2;
+    const local = localRes?.ss2;
+    if (!sync && !local) return null;
+    const raw = (!sync) ? local
+              : (!local) ? sync
+              : ((local._savedAt || 0) > (sync._savedAt || 0) ? local : sync);
+    return { ...DEFAULTS, ...raw };
   } catch { return null; }
 }
 
+// chrome.storage.sync enforces a write-rate quota (both per minute and per
+// hour). Settings are touched on every detected series and every skip, which
+// during a binge is easily enough to trip it — and once tripped, every further
+// write fails. Local is written immediately so nothing is ever lost; sync is
+// coalesced into at most one write per SYNC_WRITE_INTERVAL.
+const SYNC_WRITE_INTERVAL = 10_000;
+let _pendingSync = null;
+let _syncTimer   = null;
+
 async function saveSettings(settings) {
-  const clean = { ...DEFAULTS, ...settings };
+  const clean = { ...DEFAULTS, ...settings, _savedAt: Date.now() };
+
+  // Local is the immediate, always-correct copy — the popup's first render
+  // reads it without waiting on the background fetch.
+  await chrome.storage.local.set({ ss2: clean });
+
+  _pendingSync = clean;
+  if (_syncTimer) return;
+  _syncTimer = setTimeout(_flushSync, SYNC_WRITE_INTERVAL);
+}
+
+async function _flushSync() {
+  _syncTimer = null;
+  const payload = _pendingSync;
+  _pendingSync  = null;
+  if (!payload) return;
   try {
-    await chrome.storage.sync.set({ ss2: clean });
+    await chrome.storage.sync.set({ ss2: payload });
   } catch {
-    // Sync quota exceeded — remove the now-stale sync entry so that loadSettings
-    // does not silently return old sync data instead of the fresh local copy.
+    // Quota exceeded or sync disabled. Drop the stale sync entry so loadSettings
+    // cannot serve it in place of the fresh local copy.
     try { await chrome.storage.sync.remove('ss2'); } catch {}
   }
-  // Always mirror to local storage. This ensures the popup's Phase 1 pre-render
-  // always reads the latest settings without waiting for the async background fetch.
-  await chrome.storage.local.set({ ss2: clean });
 }
+
+// Flush a coalesced sync write before the service worker is torn down, so a
+// pending write is not deferred until the next settings change.
+chrome.runtime.onSuspend?.addListener(() => { _flushSync(); });
 
 // ── Cleanup per-tab series cache when tab closes or navigates away ──────────
 chrome.tabs.onRemoved.addListener((tabId) => {

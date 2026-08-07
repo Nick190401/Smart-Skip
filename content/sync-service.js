@@ -1,9 +1,9 @@
 ﻿﻿/**
- * Lädt Selektoren und Timing-Fenster vom Server und schickt
- * anonymisierte Lern-Daten zurück. Bleibt inaktiv bis der Nutzer
- * zustimmt — jede Methode prüft this._ready vor dem ersten Request.
+ * Fetches selectors and timing windows from the server and submits
+ * anonymised learning data back. Stays inactive until the user
+ * consents — every method checks this._ready before the first request.
  *
- * Geladen nach: learning-store.js
+ * Must be loaded after: learning-store.js
  */
 
 // SYNC_API_BASE and SYNC_API_KEY must match the values in server/config.php.
@@ -14,6 +14,11 @@ const SYNC_VERSION  = chrome.runtime.getManifest().version;
 
 const SELECTOR_CACHE_MINUTES = 60;   // how long to keep fetched selectors before re-requesting
 const TIMING_CACHE_MINUTES   = 120;  // same for timing windows
+
+// Every network call is capped. Nothing the server provides is worth stalling
+// playback for — all of it has a local fallback.
+const SYNC_TIMEOUT_MS   = 6000;  // regular API calls
+const CONFIG_TIMEOUT_MS = 3500;  // start-up config: blocks first scan, keep it short
 
 
 class SyncService {
@@ -106,8 +111,8 @@ class SyncService {
   // --- public ---
 
   /**
-   * Crowdsourced Selektoren für eine Domain holen.
-   * Merged automatisch in den lokalen learningStore.
+   * Fetch crowd-sourced selectors for a domain.
+   * Automatically merges the result into the local learningStore.
    * @returns {Promise<object|null>}
    */
   async fetchSelectors(domain) {
@@ -121,7 +126,7 @@ class SyncService {
       if (res?.found && res.selectors) {
         this._selectorCache[domain] = { data: res.selectors, fetchedAt: Date.now() };
 
-        // In lokalen learningStore übernehmen (Server-Qualität bevorzugen wenn höher)
+        // Merge into local learningStore (prefer server quality when higher)
         const local = await learningStore.getSelectors(domain);
         if (!local || res.selectors.quality > (local.quality || 0)) {
           learningStore.saveSelectors(domain, {
@@ -144,7 +149,7 @@ class SyncService {
   }
 
   /**
-   * Lokale Selektoren an den Server einreichen (Crowdsourcing-Beitrag).
+   * Submit local selectors to the server (crowdsourcing contribution).
    * Fire-and-forget.
    */
   submitSelectors(domain, selectors) {
@@ -191,7 +196,7 @@ class SyncService {
   }
 
   /**
-   * Selector-Feedback einreichen (hat der Klick funktioniert?).
+   * Submit selector feedback (did the click succeed?).
    * Fire-and-forget.
    */
   recordFeedback(data) {
@@ -209,10 +214,10 @@ class SyncService {
   }
 
   /**
-   * Button-HTML-Fingerabdruck einreichen für plattformübergreifendes Muster-Training.
-   * Der Server aggregiert diese pro Domain — so kann er dem DOMScanner eine
-   * verbesserte button-text-pattern-Liste zurückgeben und neue Plattformen
-   * erkennen, ohne dass wir hardcodierte Selektoren schreiben müssen.
+   * Submit a button HTML fingerprint for cross-platform pattern training.
+   * The server aggregates these per domain so it can return an improved
+   * button-text-pattern list to the DOMScanner and recognise new platforms
+   * without us having to write hard-coded selectors.
    * Fire-and-forget.
    *
    * @param {string} domain
@@ -269,8 +274,8 @@ class SyncService {
   }
 
   /**
-   * Crowdsourced Timing-Fenster für eine Serie holen.
-   * Merged in lokalen learningStore.
+   * Fetch crowd-sourced timing windows for a series.
+   * Merges results into the local learningStore.
    * @returns {Promise<object>} Keyed by type: {avg, from, to, samples}
    */
   async fetchTimings(seriesKey) {
@@ -284,21 +289,25 @@ class SyncService {
       if (res?.windows) {
         this._timingCache[seriesKey] = { data: res.windows, fetchedAt: Date.now() };
 
-        // In lokalen learningStore übernehmen
+        // Merge into local learningStore
         for (const [type, w] of Object.entries(res.windows)) {
           if (w.samples >= 3) {
-            // Genug statistische Datenpunkte → lokalen Cluster ersetzen
+            // Enough statistical data points — replace local cluster with server values
             learningStore.setServerTimingWindow(seriesKey, type, w);
           }
-          // Exakte {from, to}-Fenster aus timing_windows-Tabelle:
-          // Werden mit dem server-seitigen count als initialCount gespeichert
-          // → predictWindow() bekommt sofort hohe Konfidenz wenn viele
-          //   Geräte das gleiche Fenster gemeldet haben.
+          // Exact {from, to} windows from the timing_windows table:
+          // stored with the server-side count as initialCount so that
+          // predictWindow() immediately gets high confidence when many
+          // devices have reported the same window.
           if (Array.isArray(w.exact)) {
             for (const ew of w.exact) {
-              // Nimm device-Anzahl falls vorhanden, sonst raw count
-              const weight = ew.devices ?? ew.count ?? 1;
-              learningStore.recordTimingWindow(seriesKey, type, ew.from, ew.to, weight);
+              // Use device count if available, otherwise fall back to raw count.
+              // Capped: a high device count means many people watched *some*
+              // episode of the series, not that this window holds for the one
+              // playing now. It is stored under the '_server' pseudo-episode so
+              // it counts as a single opinion and stays prior-tier.
+              const weight = Math.min(ew.devices ?? ew.count ?? 1, 5);
+              learningStore.recordTimingWindow(seriesKey, type, ew.from, ew.to, weight, { server: true });
             }
           }
         }
@@ -309,7 +318,7 @@ class SyncService {
   }
 
   /**
-   * Einstellungen in der Cloud speichern.
+   * Save settings to the cloud.
    */
   async saveSettings(settings) {
     if (!this._ready) return;
@@ -323,8 +332,8 @@ class SyncService {
   }
 
   /**
-   * Einstellungen aus der Cloud laden.
-   * @returns {Promise<object|null>} settings-Objekt oder null wenn nicht gefunden
+   * Load settings from the cloud.
+   * @returns {Promise<object|null>} settings object or null if not found
    */
   async loadSettings() {
     if (!this._deviceId) return null;
@@ -339,13 +348,13 @@ class SyncService {
   }
 
   /**
-   * DSGVO Art. 17 — Alle vom Server gespeicherten Daten dieses Geräts löschen.
-   * Anschließend wird die lokale Geräte-ID entfernt, sodass beim nächsten
-   * Opt-in ein komplett neues anonymes Gerät entsteht.
+   * GDPR Art. 17 — delete all data stored on the server for this device.
+   * Afterwards removes the local device ID so that the next opt-in
+   * creates a completely fresh anonymous device.
    */
   async deleteMyData() {
     if (!this._deviceId) {
-      // Noch keine Device-ID — nichts auf dem Server vorhanden
+      // No device ID yet — nothing stored on the server
       await chrome.storage.local.remove('ss2_device_id');
       return { deleted: true };
     }
@@ -355,7 +364,7 @@ class SyncService {
         device_id: this._deviceId,
       });
       if (res?.deleted) {
-        // Lokale ID vergessen — nächster Opt-in bekommt neue UUID
+        // Forget the local ID — the next opt-in will receive a fresh UUID
         this._deviceId = null;
         this._ready    = false;
         this._queue    = [];
@@ -401,24 +410,26 @@ class SyncService {
     }
 
     // Try persistent cache from storage first (survives SW restarts)
+    let stale = null;
     try {
       const { ss2_remote_config } = await chrome.storage.local.get('ss2_remote_config');
-      if (ss2_remote_config?.data && (Date.now() - (ss2_remote_config.fetchedAt || 0)) < TTL) {
-        this._remoteConfigCache    = ss2_remote_config.data;
-        this._remoteConfigFetchedAt = ss2_remote_config.fetchedAt;
-        return this._remoteConfigCache;
+      if (ss2_remote_config?.data) {
+        if ((Date.now() - (ss2_remote_config.fetchedAt || 0)) < TTL) {
+          this._remoteConfigCache     = ss2_remote_config.data;
+          this._remoteConfigFetchedAt = ss2_remote_config.fetchedAt;
+          return this._remoteConfigCache;
+        }
+        // Expired, but still better than nothing if the server is unreachable.
+        stale = ss2_remote_config.data;
       }
     } catch (_) {}
 
-    // Fetch fresh from server
+    // Fetch fresh from server. Start-up awaits this, so it gets the short
+    // timeout — a stale or missing config only costs feature flags, whereas a
+    // hanging request costs the user every skip on the page.
     try {
-      const res = await fetch(SYNC_API_BASE, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', 'X-SS2-Key': SYNC_API_KEY },
-        body:    JSON.stringify({ action: 'getConfig', version: SYNC_VERSION }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await this._fetchJSON(
+        { action: 'getConfig', version: SYNC_VERSION }, CONFIG_TIMEOUT_MS);
       if (data.ok) {
         this._remoteConfigCache    = data;
         this._remoteConfigFetchedAt = Date.now();
@@ -429,7 +440,9 @@ class SyncService {
       }
     } catch (_) { /* offline — fall back to stale cache */ }
 
-    return this._remoteConfigCache; // may be null if never fetched successfully
+    // Server unreachable: an expired config still describes the feature flags
+    // and domain rules better than no config at all, so prefer it over null.
+    return this._remoteConfigCache || stale;
   }
 
   /** Returns the last successfully fetched remote config (synchronous). */
@@ -439,12 +452,12 @@ class SyncService {
 
   // --- internal ---
 
-  /** Auftrag in Warteschlange stellen; dann gebündelt absenden. */
+  /** Enqueue a request payload and flush as a batched request shortly after. */
   _enqueue(payload) {
     if (!this._ready) return; // silently discard — no consent
     this._queue.push(payload);
     if (!this._queueTimer) {
-    // mehrere Aufrufe in ~800ms in einem Request bündeln
+      // Batch multiple calls that arrive within ~800 ms into a single request
       this._queueTimer = setTimeout(() => this._flushQueue(), 800);
     }
   }
@@ -466,19 +479,40 @@ class SyncService {
     }
   }
 
-  async _post(payload) {
-    const res = await fetch(SYNC_API_BASE, {
-      method:  'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-SS2-Key':    SYNC_API_KEY,
-      },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+  /**
+   * POST to the sync API with a hard timeout.
+   *
+   * Without one, a server that accepts the connection but never answers — a
+   * captive portal, an overloaded host, a blackholed DNS entry — leaves the
+   * promise pending forever. Callers that await it (arming the timing skipper,
+   * extension start-up) would then hang for the lifetime of the page, so a slow
+   * server silently disabled the whole extension. Fail fast instead: every
+   * caller already treats a rejection as "offline, carry on".
+   */
+  async _post(payload, timeoutMs = SYNC_TIMEOUT_MS) {
+    const data = await this._fetchJSON(payload, timeoutMs);
     if (!data.ok) throw new Error(data.error || 'API error');
     return data;
+  }
+
+  async _fetchJSON(payload, timeoutMs = SYNC_TIMEOUT_MS) {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(SYNC_API_BASE, {
+        method:  'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-SS2-Key':    SYNC_API_KEY,
+        },
+        body:   JSON.stringify(payload),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 

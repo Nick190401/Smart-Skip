@@ -78,25 +78,27 @@ class SmartSkipV2 {
     if (!this.enabled) return;
 
     // ── Remote admin config ──────────────────────────────────────────────────
-    // fetchRemoteConfig() is non-blocking on network but uses a 6-hour cache,
-    // so this await is nearly instant on any run after the first.
-    try { this._remoteConfig = await syncService.fetchRemoteConfig(); } catch (_) {}
+    // Cached for 6 hours, so this is instant on almost every run. When the cache
+    // has expired it needs the network — and start-up must not depend on that.
+    // Wait briefly, then start anyway and apply the config if it still arrives.
+    const configP = syncService.fetchRemoteConfig().catch(() => null);
+    try {
+      this._remoteConfig = await Promise.race([
+        configP,
+        new Promise(r => setTimeout(() => r(null), 1500)),
+      ]);
+    } catch (_) {}
 
-    // Maintenance mode: admin paused the extension for all users
-    if (this._remoteConfig?.maintenance) {
-      console.warn('[SmartSkip] Server maintenance mode active — scanning paused.');
-      return;
-    }
+    if (this._applyRemoteConfigGates()) return;
 
-    // Domain disabled by admin rule (disable_extension)
-    if (this._remoteConfig?.domain_disabled) return;
-
-    // Version gate: extension is too old — stop completely until user updates
-    if (this._remoteConfig?.version_ok === false) {
-      console.warn(
-        `[SmartSkip] Version too old. Please update to v${this._remoteConfig.min_ext_version || '?'} or newer.`
-      );
-      return;
+    // Config that arrived after we gave up waiting: honour it retroactively, so
+    // maintenance mode and admin rules still take effect on an already-running page.
+    if (!this._remoteConfig) {
+      configP.then(cfg => {
+        if (!cfg || this._remoteConfig) return;
+        this._remoteConfig = cfg;
+        if (this._applyRemoteConfigGates()) this.shutdown();
+      });
     }
 
     this._setupMessageListener();
@@ -130,7 +132,7 @@ class SmartSkipV2 {
     // Watch for navigation (SPA support)
     let lastHref = location.href;
     let lastDomain = location.hostname;
-    const navCheck = setInterval(() => {
+    const navCheck = this._navCheck = setInterval(() => {
       // Stop silently if the extension was reloaded while this tab is open.
       if (!_ssContextValid()) { clearInterval(navCheck); return; }
       if (location.href !== lastHref) {
@@ -166,6 +168,48 @@ class SmartSkipV2 {
     }
 
     this._waitForVideo();
+  }
+
+  /**
+   * Admin-controlled kill switches. Returns true when the extension must not run.
+   * Split out of init() so a config that arrives after start-up can be applied
+   * through exactly the same checks.
+   */
+  _applyRemoteConfigGates() {
+    const cfg = this._remoteConfig;
+    if (!cfg) return false;
+
+    if (cfg.maintenance) {
+      console.warn('[SmartSkip] Server maintenance mode active — scanning paused.');
+      return true;
+    }
+    if (cfg.domain_disabled) return true;
+    if (cfg.version_ok === false) {
+      console.warn(
+        `[SmartSkip] Version too old. Please update to v${cfg.min_ext_version || '?'} or newer.`
+      );
+      return true;
+    }
+    return false;
+  }
+
+  /** Tear down every timer, observer and listener this instance owns. */
+  shutdown() {
+    this.enabled = false;
+    for (const t of ['_scanDebounce', '_metaDebounce', '_hudHideTimer']) {
+      clearTimeout(this[t]); this[t] = null;
+    }
+    for (const t of ['_metaRetry', '_metaSlowRetry', '_periodicScanInterval', '_navCheck']) {
+      clearInterval(this[t]); this[t] = null;
+    }
+    for (const o of ['_domObserver', '_metaObserver', '_titleObserver', '_videoObserver']) {
+      try { this[o]?.disconnect(); } catch {}
+      this[o] = null;
+    }
+    try { timingSkipper.disarm(); }   catch {}
+    try { signalCollector.disarm(); } catch {}
+    try { this._hud?.remove(); } catch {}
+    this._hud = null;
   }
 
   _setupDOMObserver() {
@@ -280,13 +324,18 @@ class SmartSkipV2 {
   // every 8 s — picks up titles that load well after the initial burst
   _startSlowMetaRetry() {
     if (this._metaSlowRetry) return;
+    // Capped at ~10 minutes. Each tick re-queries every h1/h2 in the document and
+    // rebuilds the metadata observers; on a page whose title we will never parse
+    // that ran for as long as the tab stayed open. A fresh SPA navigation restarts
+    // the whole retry ladder anyway, so nothing is permanently given up.
+    let ticks = 0;
     this._metaSlowRetry = setInterval(() => {
-      if (!_ssContextValid()) { clearInterval(this._metaSlowRetry); this._metaSlowRetry = null; return; }
+      const stop = () => { clearInterval(this._metaSlowRetry); this._metaSlowRetry = null; };
+      if (!_ssContextValid()) return stop();
+      if (++ticks > 75) return stop();
       if (this.currentSeries && this.currentSeries.source !== 'title-fallback'
           && this.currentSeries.source !== 'title-raw') {
-        clearInterval(this._metaSlowRetry);
-        this._metaSlowRetry = null;
-        return;
+        return stop();
       }
       if (!this.platform.isWatchPage()) return;
       this._setupMetaObserver();
@@ -316,19 +365,25 @@ class SmartSkipV2 {
       const video = document.querySelector('video');
       if (video && !isNaN(video.currentTime) && video.currentTime > 0) {
         const types = ['intro', 'recap', 'credits', 'ads', 'next'];
+        const ctx   = { duration: video.duration };
         for (const t of types) {
-          const w = (epKey && await learningStore.predictWindow(epKey, t))
-                 || await learningStore.predictWindow(seriesKey, t);
+          const w = (epKey && await learningStore.predictWindow(epKey, t, { ...ctx, tier: 'episode' }))
+                 || await learningStore.predictWindow(seriesKey, t, { ...ctx, tier: 'series' });
           if (w && video.currentTime >= w.from && video.currentTime <= w.to) {
             insidePredictedWindow = true;
             break;
           }
         }
-      // outside predicted window — slow down but don't stop
-        if (!insidePredictedWindow && this._lastScanAt
-            && Date.now() - this._lastScanAt < 4000) return;
       }
     }
+
+    // Scan budget. Every scan runs an AI classification pass, and the safety-net
+    // interval alone asks for one every 2 s, plus whatever the DOM observer fires
+    // on top. Unthrottled that is constant model load for hours of playback — and
+    // the throttle used to apply only once a series had been detected, so the
+    // pages that knew the least scanned the hardest.
+    const sinceLast = this._lastScanAt ? Date.now() - this._lastScanAt : Infinity;
+    if (sinceLast < (insidePredictedWindow ? 1200 : 4000)) return;
     this._lastScanAt = Date.now();
 
     this._scanPending = true;
@@ -587,9 +642,12 @@ class SmartSkipV2 {
             series:     this.currentSeries,
             domain:     location.hostname,
           });
-          // record the timing so it feeds back into LearningStore
+          // Feed the timing back into LearningStore only when the skip was
+          // driven by live evidence from this episode. Recording a jump that a
+          // series prior triggered would let that prior cite itself as proof and
+          // grow stronger with every episode it got wrong.
           const vid = document.querySelector('video');
-          const t   = vid ? win.from + (win.to - win.from) / 2 : null;
+          const t   = vid && win.local ? win.from + (win.to - win.from) / 2 : null;
           if (t !== null) {
             if (tEpKey)     learningStore.recordTiming(tEpKey,     win.type, t);
             if (tSeriesKey) learningStore.recordTiming(tSeriesKey, win.type, t);
@@ -1187,8 +1245,12 @@ class SmartSkipV2 {
     undo.className = 'ss-undo';
     undo.textContent = i18n.t('undo') || 'Undo';
     undo.addEventListener('click', () => {
-      const vid = document.querySelector('video');
-      if (vid && win._undoTime != null) vid.currentTime = win._undoTime;
+      // Routed through TimingSkipper so the rewind is validated against where
+      // the playhead actually is now — the button lives for 5 s and the user may
+      // have seeked away — and so our own seek is not mistaken for user intent.
+      // Undo is also the clearest possible "that was not an intro", so it
+      // penalises the window and stops it firing on the following episodes.
+      try { timingSkipper.undoSkip(win); } catch {}
       undo.remove();
       this._hud.classList.remove('ss-interactive');
       const b = document.createElement('span');
@@ -1227,13 +1289,16 @@ class SmartSkipV2 {
     btn.style.background = 'rgba(180,83,9,.7)';
     btn.textContent = i18n.t('skip') || 'Skip';
     btn.addEventListener('click', () => {
-      const vid = document.querySelector('video');
-      if (vid) vid.currentTime = win.to;
+      // The hint is on screen for 9 s. Let TimingSkipper decide whether the
+      // window is still ahead of the playhead — otherwise the "skip" would
+      // rewind the user to where the segment used to be.
+      let done = false;
+      try { done = timingSkipper.confirmSkip(win); } catch {}
       btn.remove();
       this._hud.classList.remove('ss-interactive');
       const b = document.createElement('span');
-      b.className = 'ss-badge ss-badge--skip';
-      b.textContent = 'skipped';
+      b.className = done ? 'ss-badge ss-badge--skip' : 'ss-badge ss-badge--off';
+      b.textContent = done ? 'skipped' : '—';
       this._hud.appendChild(b);
       clearTimeout(this._hudHideTimer);
       this._hudHideTimer = setTimeout(() => this._hud?.classList.remove('ss-visible'), 2500);
@@ -1368,14 +1433,20 @@ class SmartSkipV2 {
       this._scheduleMeta(300);
       return;
     }
-    const obs = new MutationObserver((_, o) => {
-      if (document.querySelector('video')) {
-        o.disconnect();
-        this._scheduleScan(300);
-        this._scheduleMeta(300);
-      }
+    // Held on `this` so shutdown() can reach it: an un-disconnected subtree
+    // observer on document.body keeps firing for the lifetime of a page that
+    // never gets a player (a browse page the user leaves open for hours).
+    this._videoObserver?.disconnect();
+    this._videoObserver = new MutationObserver(() => {
+      if (!document.querySelector('video')) return;
+      this._videoObserver?.disconnect();
+      this._videoObserver = null;
+      this._scheduleScan(300);
+      this._scheduleMeta(300);
     });
-    obs.observe(document.body, { childList: true, subtree: true });
+    if (document.body) {
+      this._videoObserver.observe(document.body, { childList: true, subtree: true });
+    }
   }
 
   _setupMessageListener() {

@@ -2,12 +2,12 @@
 /**
  * Smart Skip v2 — REST API
  *
- * Auf den Server hochladen nach: /public_html/smart-skip-api/api.php
- * config.php muss im gleichen Verzeichnis liegen.
+ * Upload to server at: /public_html/smart-skip-api/api.php
+ * config.php must reside in the same directory.
  *
- * Endpoint: POST https://deine-domain.de/smart-skip-api/api.php
+ * Endpoint: POST https://your-domain.com/smart-skip-api/api.php
  * Body:      JSON  { "action": "...", ...params }
- * Header:    X-SS2-Key: <API_KEY aus config.php>
+ * Header:    X-SS2-Key: <API_KEY from config.php>
  */
 
 declare(strict_types=1);
@@ -31,13 +31,13 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     api_error(405, 'Method Not Allowed');
 }
 
-// ── API-Key prüfen ────────────────────────────────────────────────────────────
+// ── Validate API key ────────────────────────────────────────────
 $incomingKey = $_SERVER['HTTP_X_SS2_KEY'] ?? '';
 if (!hash_equals(API_KEY, $incomingKey)) {
     api_error(401, 'Unauthorized');
 }
 
-// ── Body parsen ───────────────────────────────────────────────────────────────
+// ── Parse body ───────────────────────────────────────────────────────────────
 $body = json_decode(file_get_contents('php://input'), true);
 if (!is_array($body) || empty($body['action'])) {
     api_error(400, 'Invalid request body');
@@ -46,10 +46,10 @@ if (!is_array($body) || empty($body['action'])) {
 $action   = (string) $body['action'];
 $deviceId = isset($body['device_id']) ? sanitize_id($body['device_id']) : null;
 
-// ── DB-Verbindung ─────────────────────────────────────────────────────────────
+// ── DB connection ─────────────────────────────────────────────────────────────
 $pdo = db_connect();
 
-// ── Rate-Limiting (Ausnahme: registerDevice darf immer) ───────────────────────
+// ── Rate-limiting (exception: registerDevice is always allowed) ─────────────
 if ($action !== 'registerDevice' && $deviceId) {
     check_rate_limit($pdo, $deviceId);
 }
@@ -58,7 +58,7 @@ if ($action !== 'registerDevice' && $deviceId) {
 switch ($action) {
 
     // ------------------------------------------------------------------
-    //  Gerät registrieren oder aktualisieren (first-call beim App-Start)
+    //  Register or update a device (first call on extension start)
     // ------------------------------------------------------------------
     case 'registerDevice':
         require_device_id($deviceId);
@@ -75,7 +75,7 @@ switch ($action) {
         break;
 
     // ------------------------------------------------------------------
-    //  Crowdsourced Selektoren für eine Domain abrufen
+    //  Fetch crowd-sourced selectors for a domain
     // ------------------------------------------------------------------
     case 'fetchSelectors':
         $domain = sanitize_domain($body['domain'] ?? '');
@@ -189,11 +189,10 @@ switch ($action) {
         break;
 
     // ------------------------------------------------------------------
-    //  Button-Fingerabdruck einreichen — für plattformübergreifendes
-    //  Text-Pattern-Training (kein extra Schema erforderlich).
-    //  Button-Texte werden in selector_feedback mit sources='text_pattern'
-    //  gespeichert, damit wir später eine Liste häufiger Skip-Phrasen
-    //  pro Domain aufbauen können.
+    //  Submit a button fingerprint — for cross-platform pattern training
+    //  (no extra schema required).
+    //  Button texts are stored in selector_feedback with sources='text_pattern'
+    //  so we can later build a list of common skip phrases per domain.
     // ------------------------------------------------------------------
     case 'submitButtonSignature':
         require_device_id($deviceId);
@@ -262,9 +261,9 @@ switch ($action) {
         break;
 
     // ------------------------------------------------------------------
-    //  Exaktes Timing-Fenster {from, to} einreichen (signal-collector)
-    //  Wird separat in timing_windows gespeichert; fetchTimings gibt
-    //  geclusterte Fenster mit Konfidenz zurück → kein Button nötig.
+    //  Submit an exact timing window {from, to} (signal-collector)
+    //  Stored separately in timing_windows; fetchTimings returns
+    //  clustered windows with confidence — no button required.
     // ------------------------------------------------------------------
     case 'recordTimingWindow':
         require_device_id($deviceId);
@@ -281,9 +280,13 @@ switch ($action) {
             api_error(400, 'timing values out of range');
         }
 
+        // One row per device per window (see schema_timing_dedup.sql). Repeat
+        // sightings raise `observations` instead of inserting another vote, so a
+        // single device cannot outweigh the rest of the crowd by volume.
         $stmt = $pdo->prepare(
             'INSERT INTO timing_windows (series_key, event_type, from_time, to_time, device_id)
-             VALUES (?, ?, ?, ?, ?)'
+             VALUES (?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE observations = observations + 1'
         );
         $stmt->execute([$seriesKey, $eventType, $from, $to, $deviceId]);
         api_ok(['saved' => true]);
@@ -302,7 +305,7 @@ switch ($action) {
         if (!$seriesKey || !$eventType || $videoTime === null) {
             api_error(400, 'series_key, event_type and video_time required');
         }
-        // Plausibilitäts-Check: 0–7200 s (2h max)
+        // Plausibility check: 0–7200 s (2 h max)
         if ($videoTime < 0 || $videoTime > 7200) api_error(400, 'video_time out of range');
 
         $stmt = $pdo->prepare(
@@ -314,7 +317,7 @@ switch ($action) {
         break;
 
     // ------------------------------------------------------------------
-    //  Crowdsourced Timing-Fenster für eine Serie abrufen
+    //  Fetch crowd-sourced timing windows for a series
     // ------------------------------------------------------------------
     case 'fetchTimings':
         $seriesKey = substr((string)($body['series_key'] ?? ''), 0, 256);
@@ -357,6 +360,10 @@ switch ($action) {
         // the top-3 clusters per type ordered by observation count.
         // These are used by the client at higher confidence than statistical
         // point-in-time data — enough observations → skip without any button.
+        // Ranked by how many *distinct devices* back a cluster, not by how many
+        // rows it has. Only the top three clusters per type are returned, so the
+        // ordering decides what every user of the series is told — raw row count
+        // let one prolific submitter decide that.
         $winStmt = $pdo->prepare(
             'SELECT event_type,
                     ROUND(AVG(from_time), 1) AS avg_from,
@@ -366,7 +373,7 @@ switch ($action) {
              FROM timing_windows
              WHERE series_key = ?
              GROUP BY event_type, ROUND(from_time / 30), ROUND(to_time / 30)
-             ORDER BY event_type, cnt DESC'
+             ORDER BY event_type, devices DESC, cnt DESC'
         );
         $winStmt->execute([$seriesKey]);
         $exactRows = $winStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -388,7 +395,7 @@ switch ($action) {
             if (isset($windows[$type])) {
                 $windows[$type]['exact'] = $exacts;
             } else {
-                // Exakte Fenster vorhanden, aber keine Einzelmesspunkte
+                // Exact windows present but no individual data points
                 $windows[$type] = ['exact' => $exacts];
             }
         }
@@ -397,7 +404,7 @@ switch ($action) {
         break;
 
     // ------------------------------------------------------------------
-    //  Einstellungen speichern (Settings-Sync)
+    //  Save settings (settings sync)
     // ------------------------------------------------------------------
     case 'saveSettings':
         require_device_id($deviceId);
@@ -415,7 +422,7 @@ switch ($action) {
         break;
 
     // ------------------------------------------------------------------
-    //  Einstellungen laden (Settings-Sync)
+    //  Load settings (settings sync)
     // ------------------------------------------------------------------
     case 'loadSettings':
         require_device_id($deviceId);
@@ -432,7 +439,7 @@ switch ($action) {
         break;
 
     // ------------------------------------------------------------------
-    //  Fehlerbericht einreichen
+    //  Submit an error report
     // ------------------------------------------------------------------
     case 'reportError':
         // Rate-limit error reports even without device_id to prevent abuse
@@ -457,14 +464,14 @@ switch ($action) {
         break;
 
     // ------------------------------------------------------------------
-    //  DSGVO Art. 17 — Alle Daten eines Geräts löschen
+    //  GDPR Art. 17 — delete all data for a device
     // ------------------------------------------------------------------
     case 'deleteMyData':
         require_device_id($deviceId);
-        // Transaktional: alle Tabellen bereinigen die device_id referenzieren.
-        // FK ON DELETE CASCADE erledigt device_settings automatisch,
-        // aber skip_events, selector_feedback, timing_windows, error_reports
-        // und rate_limits löschen wir explizit für maximale Transparenz.
+        // Transactional: clean up all tables that reference device_id.
+        // FK ON DELETE CASCADE handles device_settings automatically,
+        // but skip_events, selector_feedback, timing_windows, error_reports
+        // and rate_limits are deleted explicitly for maximum transparency.
         try {
             $pdo->beginTransaction();
             foreach ([
@@ -478,7 +485,7 @@ switch ($action) {
                 $pdo->prepare("DELETE FROM `{$table}` WHERE device_id = ?")
                     ->execute([$deviceId]);
             }
-            // Gerät selbst zuletzt (FK-Constraint) - entfernt auch device_settings via CASCADE
+            // Delete the device itself last (FK constraint) — also removes device_settings via CASCADE
             $pdo->prepare('DELETE FROM devices WHERE id = ?')->execute([$deviceId]);
             $pdo->commit();
         } catch (PDOException $e) {
@@ -489,15 +496,15 @@ switch ($action) {
         break;
 
     // ------------------------------------------------------------------
-    //  Gesundheits-Check
+    //  Health check
     // ------------------------------------------------------------------
     case 'ping':
         api_ok(['pong' => true, 'ts' => time()]);
         break;
 
     // ------------------------------------------------------------------
-    //  Extension-Konfiguration (Feature-Flags, Broadcasts, Keywords,
-    //  Domain-Regeln) — wird beim Start der Extension abgerufen
+    //  Extension configuration (feature flags, broadcasts, keywords,
+    //  domain rules) — fetched on extension startup
     // ------------------------------------------------------------------
     case 'getConfig':
         $cfgDomain = sanitize_domain($body['domain'] ?? '');
@@ -509,7 +516,7 @@ switch ($action) {
             $cfgSettings[$r['setting_key']] = $r['setting_value'];
         }
 
-        // Aktive, nicht-abgelaufene, gestartete Broadcasts
+        // Active broadcasts that have started and have not yet expired
         $cfgBroadcasts = $pdo->query(
             "SELECT id, title, body, type, link_url, link_text, icon_override, dismissible
                FROM broadcasts
@@ -519,18 +526,18 @@ switch ($action) {
               ORDER BY created_at DESC"
         )->fetchAll();
 
-        // Admin-definierte Quick-Action Buttons
+        // Admin-defined quick-action buttons
         $cfgQuickActions = $pdo->query(
             "SELECT label, url, icon FROM quick_actions
               WHERE is_active = 1 ORDER BY sort_order, created_at LIMIT 3"
         )->fetchAll();
 
-        // Admin-gepflegte Skip-Keywords
+        // Admin-managed skip keywords
         $cfgKeywords = $pdo->query(
             'SELECT keyword, lang FROM skip_keywords ORDER BY lang, keyword'
         )->fetchAll();
 
-        // Domain-spezifische Regeln für diese Domain
+        // Domain-specific rules for the current domain
         $cfgDisabled = false;
         $cfgTrusted  = false;
         $cfgBlockTel = false;
@@ -544,7 +551,7 @@ switch ($action) {
             }
         }
 
-        // Version Gate: prüfen ob Extension zu alt ist
+        // Version gate: check whether the extension is too old
         $minVer = trim($cfgSettings['min_ext_version'] ?? '');
         $versionOk = !$minVer || !$cfgVer ||
                      version_compare($cfgVer, $minVer, '>=');
@@ -577,7 +584,7 @@ switch ($action) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  Hilfsfunktionen
+//  Helper functions
 // ═════════════════════════════════════════════════════════════════════════════
 
 // db_connect() is defined in config.php (shared with auth.php).
@@ -620,13 +627,13 @@ function check_rate_limit(PDO $pdo, string $deviceId): void {
             api_error(429, 'Rate limit exceeded');
         }
 
-        // Alte Einträge gelegentlich aufräumen
+        // Prune stale entries occasionally
         if (rand(0, 100) === 0) {
             $pdo->prepare('DELETE FROM rate_limits WHERE window_ts < ?')
                 ->execute([$window - 5]);
         }
     } catch (PDOException $_) {
-        // Rate-Limiting-Fehler nicht den Request killen lassen
+        // Don't let rate-limiting errors abort the actual request
     }
 }
 
@@ -647,7 +654,7 @@ function sanitize_id(string $s): string {
 }
 
 function sanitize_domain(string $s): string {
-    // Nur Hostname, keine URL
+    // Hostname only, no full URLs
     $s = strtolower(trim($s));
     $s = preg_replace('/[^a-z0-9\.\-]/', '', $s);
     return substr($s, 0, 128);
