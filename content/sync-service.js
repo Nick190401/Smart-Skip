@@ -23,8 +23,10 @@ const CONFIG_TIMEOUT_MS = 3500;  // start-up config: blocks first scan, keep it 
 
 class SyncService {
   constructor() {
-    this._deviceId   = null;
-    this._ready      = false;      // true nach registerDevice
+    this._deviceId     = null;
+    this._deviceSecret = undefined; // undefined = not read from storage yet
+    this._deviceBound  = false;
+    this._ready        = false;    // true nach registerDevice
     this._queue      = [];         // ausstehende fire-and-forget Requests
     this._queueTimer = null;
     this._selectorCache = {};      // domain → { data, fetchedAt }
@@ -61,6 +63,30 @@ class SyncService {
     });
   }
 
+  /**
+   * Token the server issued for this device id, or '' if we never got one.
+   *
+   * The id alone proves nothing — it is a UUID this client made up, and the API
+   * key that used to gate the API ships in the extension package and is readable
+   * by anyone. The server hands out a secret the first time an id is registered
+   * and from then on only writes carrying it count toward what other users are
+   * served. Losing it is harmless: the id is stored beside it, so a cleared
+   * profile produces a new id that binds itself on first contact.
+   */
+  async _getDeviceSecret() {
+    if (this._deviceSecret !== undefined) return this._deviceSecret;
+    try {
+      const { ss2_device_secret } = await chrome.storage.local.get('ss2_device_secret');
+      this._deviceSecret = ss2_device_secret || '';
+    } catch { this._deviceSecret = ''; }
+    return this._deviceSecret;
+  }
+
+  async _setDeviceSecret(secret) {
+    this._deviceSecret = secret || '';
+    try { await chrome.storage.local.set({ ss2_device_secret: this._deviceSecret }); } catch {}
+  }
+
   async _getOrCreateDeviceId() {
     const stored = await chrome.storage.local.get('ss2_device_id');
     if (stored.ss2_device_id) return stored.ss2_device_id;
@@ -76,12 +102,19 @@ class SyncService {
 
   async _registerDevice() {
     try {
-      await this._post({
+      const res = await this._post({
         action:     'registerDevice',
         device_id:  this._deviceId,
         version:    SYNC_VERSION,
         user_agent: navigator.userAgent.slice(0, 128),
+        // Present the token we already hold so the server can re-confirm the
+        // binding rather than treat us as an unrelated caller.
+        device_secret: await this._getDeviceSecret(),
       });
+      // Returned exactly once, on the call that claims the id. Every later
+      // registration answers without it.
+      if (res?.device_secret) await this._setDeviceSecret(res.device_secret);
+      this._deviceBound = res?.bound === true;
     } catch (_) { /* offline — kein Problem */ }
   }
 
@@ -359,11 +392,16 @@ class SyncService {
         device_id: this._deviceId,
       });
       if (res?.deleted) {
-        // Forget the local ID — the next opt-in will receive a fresh UUID
-        this._deviceId = null;
-        this._ready    = false;
-        this._queue    = [];
-        await chrome.storage.local.remove('ss2_device_id');
+        // Forget the local ID — the next opt-in will receive a fresh UUID.
+        // The binding token goes with it: the server no longer knows this id,
+        // so presenting its old secret would only fail verification and leave
+        // the fresh install writing unverified rows forever.
+        this._deviceId     = null;
+        this._deviceSecret = '';
+        this._deviceBound  = false;
+        this._ready        = false;
+        this._queue        = [];
+        await chrome.storage.local.remove(['ss2_device_id', 'ss2_device_secret']);
       }
       return res;
     } catch (e) {
@@ -486,6 +524,15 @@ class SyncService {
   }
 
   async _fetchJSON(payload, timeoutMs = SYNC_TIMEOUT_MS) {
+    // Attached centrally rather than at each call site: every action that names
+    // a device has to prove it owns that device, and one forgotten call site
+    // would silently downgrade itself to an unverified write that never reaches
+    // the quorum. registerDevice fills the field in itself.
+    if (payload?.device_id && payload.action !== 'registerDevice') {
+      const secret = await this._getDeviceSecret();
+      if (secret) payload = { ...payload, device_secret: secret };
+    }
+
     const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {

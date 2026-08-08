@@ -42,6 +42,31 @@ define('RATE_LIMIT_PER_MIN', 120);
 // einem NAT teilt sich eine IP.
 define('RATE_LIMIT_PER_IP_PER_MIN', 300);
 
+// ── Device-Bindung & Quorum ───────────────────────────────────────────────────
+// Der API-Key liegt in der Extension und ist damit oeffentlich. Eine device_id
+// allein beweist deshalb nichts — sie wird vom Aufrufer erfunden. registerDevice
+// vergibt pro device_id einmalig ein Token (Trust On First Use); nur Writes, die
+// dieses Token vorlegen, zaehlen fuer das Quorum unten.
+//
+// false = Rollout-Phase: Writes ohne Token werden angenommen, aber als
+//         unverified markiert und beeinflussen NICHT, was andere ausgeliefert
+//         bekommen. Alte Installationen funktionieren weiter.
+// true  = Writes ohne Token werden abgelehnt. Erst umlegen, wenn das Update
+//         verbreitet ist (Verhaeltnis verified/unverified in der DB pruefen).
+define('REQUIRE_DEVICE_SECRET', false);
+
+// So viele VERSCHIEDENE gebundene Geraete muessen ein Fenster bzw. einen
+// Selektor bestaetigen, bevor er ueberhaupt ausgeliefert wird.
+define('QUORUM_MIN_DEVICES', 3);
+
+// ... und ueber so viele verschiedene Kalendertage verteilt. Das ist die Haelfte,
+// die ein Burst nicht kaufen kann: er muss morgen wiederkommen.
+define('QUORUM_MIN_DAYS', 2);
+
+// Tageslimit fuer Writes pro Domain, egal von wem. Begrenzt den Schaden eines
+// Proxy-Pools, den das IP-Limit nicht sieht.
+define('DOMAIN_WRITE_CAP_PER_DAY', 5000);
+
 // ── Entwicklungsmodus ─────────────────────────────────────────────────────────
 define('DEBUG_MODE', false);   // true = DB-Fehlerdetails in der Response
 

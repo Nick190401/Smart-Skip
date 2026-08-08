@@ -114,32 +114,19 @@ means a future edit cannot loosen it by accident.
 
 ---
 
-## Open — needs your decision
+## Findings raised in round 1
 
-### A. No proof of ownership on device-scoped actions — API, medium
+Severity and status as of round 2. A, F and G are fixed; B, C, D and E remain
+open and are yours to decide.
 
-`deleteMyData`, `loadSettings` and `saveSettings` accept any well-formed
-`device_id`. `require_device_id()` validates the *shape*, not the bearer. Anyone
-who learns a device ID can read that device's settings — which include the
-`series` keys, i.e. what they watch — or delete their data.
+### A. No proof of ownership on device-scoped actions — API, medium — **FIXED in round 2**
 
-What keeps this from being critical: a v4 UUID is 122 bits and nothing in the API
-enumerates device IDs. Practical risk today is low.
+`deleteMyData`, `loadSettings` and `saveSettings` accepted any well-formed
+`device_id`; `require_device_id()` validated the *shape*, not the bearer.
 
-The fix is trust-on-first-use and is backward compatible:
-
-1. `ALTER TABLE devices ADD COLUMN secret CHAR(64) NULL;`
-2. On `registerDevice`, if `secret IS NULL`, generate one and return it; if it is
-   set, require the caller to present it.
-3. Client stores it in `chrome.storage.local` next to the device ID and sends it
-   with the three device-scoped actions.
-
-Existing installs bind on their next start. Unbound IDs stay claimable, but only
-by someone who already guessed the UUID.
-
-I did not implement this: it needs a schema migration and a client change, and I
-cannot test either against your live database. Deploying it untested would risk
-breaking cloud sync for every installed user.
+Superseded by finding 7. These three actions now refuse whenever the device is
+bound and the caller cannot present its token. Unbound ids stay claimable, but
+only by someone who already guessed a 122-bit UUID.
 
 ### B. Crowd selectors are executable reach into other users' pages — design
 
@@ -183,26 +170,102 @@ loses all of them at once.
 
 ---
 
+## Round 2 — hardening the API against a published key
+
+Everything in this section is implemented. Apply
+`server/schema_device_binding.sql`, then deploy `api.php` and `config.php`.
+
+### 7. Device binding, trust on first use — closes A, F and G
+
+`registerDevice` now issues a 32-byte token the first time a device id is
+claimed, stores only its SHA-256, and returns the plaintext exactly once. From
+then on that token, not the id, is what identifies the installation.
+
+Nothing about the rollout is breaking. `REQUIRE_DEVICE_SECRET` defaults to
+`false`: an installation that predates this keeps writing, its rows are simply
+marked `verified = 0`, and **unverified rows do not count toward the quorum that
+decides what anyone else is served.** The security benefit lands immediately;
+flip the flag to `true` once the update has propagated and unverified writes are
+refused outright.
+
+Ownership is gated independently of that flag: `loadSettings`, `saveSettings`
+and `deleteMyData` refuse as soon as the device *is* bound and the caller cannot
+present the token. Knowing a UUID stops being enough the moment that device has
+something to protect.
+
+### 8. Quorum on everything that is served
+
+`fetchTimings` now counts only verified rows and requires
+`QUORUM_MIN_DEVICES` (3) distinct bound devices **across `QUORUM_MIN_DAYS` (2)
+distinct calendar days**. The device count is the half that binding makes
+meaningful; the day spread is the half a burst cannot buy at any price.
+
+`fetchSelectors` applies the same rule to suppression, which closes F: feedback
+is one row per device now, so five submitted misses from one caller no longer
+retire a working selector for everybody.
+
+### 9. Per-domain daily write cap
+
+`DOMAIN_WRITE_CAP_PER_DAY` (5000) bounds the blast radius of a proxy pool, which
+per-IP limiting cannot see. It doubles as a signal — a domain that suddenly
+produces thousands of writes is worth looking at whoever sent them.
+
+### 10. GDPR deletion was broken — high, and a false claim in the store listing
+
+`deleteMyData` deleted `FROM selector_feedback WHERE device_id = ?`. That column
+did not exist. The statement threw, the transaction rolled back, and the endpoint
+answered **500 for every user who ever pressed "erase my cloud data"** — nothing
+was ever deleted. `video_timings` was missing from the list outright, so timing
+samples would have survived even a working deletion.
+
+The migration adds the column and `api.php` adds the missing table. Until this is
+deployed, the sentence in the store listing that says there is a button which
+erases everything stored under your device ID is **not true**. Deploy before
+publishing, or cut the claim.
+
+---
+
 ## Where the API stands with a published key
 
-Straight answer: abuse is now bounded by throughput, not by authentication.
-There is no identity in the system. The key proves nothing, and after the fixes
-above the only thing standing between a caller and a write is 300 requests per
-minute per IP.
+The key still proves nothing — that cannot change while it ships in the package.
+What changed is that the key is no longer the thing being relied on. Identity now
+comes from a token the server issues and the client holds, and **writes no longer
+influence what anyone else receives until a quorum of bound devices, spread over
+more than one day, agrees.**
 
-What an attacker holding the key can still do, per action:
+An attacker with the key can still write. They can no longer be heard.
 
-| Action | Reachable | Impact |
+| Action | Can they call it | Can it reach other users |
 | --- | --- | --- |
-| `submitSelectors` | yes | Fill all 20 shared selector slots for a domain. Served to every user on it. |
-| `recordFeedback` | yes | Set hits/misses for any domain+selector. See F below. |
-| `recordTimingWindow` / `recordTiming` | yes | Vote on the windows everyone receives. See G below. |
-| `registerDevice`, `recordEvent`, `reportError`, `submitButtonSignature` | yes | Row growth, analytics pollution. |
-| `getConfig` | yes | Read broadcasts, keywords, quick actions, feature flags, changelog. |
-| `fetchSelectors`, `fetchTimings`, `ping` | yes | Read-only, low value. |
-| `saveSettings`, `loadSettings`, `deleteMyData` | needs the UUID | See A. |
+| `recordTimingWindow` / `recordTiming` | yes | no — unverified rows are excluded from `fetchTimings` |
+| `recordFeedback` | yes, up to the domain cap | no — suppression needs 3 bound devices |
+| `submitSelectors` | yes, up to the domain cap | partly — see B, still the weakest path |
+| `recordEvent`, `reportError`, `submitButtonSignature` | yes | no — analytics only |
+| `getConfig` | yes | no — read-only |
+| `loadSettings`, `saveSettings`, `deleteMyData` | only for an unbound id | no |
 
-### F. `recordFeedback` can suppress working selectors — API, medium
+### What still gets through
+
+Stated plainly, because the quorum raises cost rather than closing the hole: an
+attacker who **registers devices properly, keeps the tokens, and writes on two
+separate days** does reach the served set. The threat-model simulation
+(`server/threat-model.test.js`, case 3b) demonstrates exactly that and asserts it
+succeeds — 50 bound devices over two days take the cluster.
+
+What that now requires is registration, persistence and patience, and all three
+leave marks: `domain_write_caps` shows the volume, the verified/unverified ratio
+shows the shape, and `devices.bound_at` shows a burst of registrations. That is
+detection, not prevention. If you want prevention, the next step is per-device
+reputation — a device whose submissions are repeatedly contradicted by others
+stops counting — which needs a scoring pass over historical data rather than a
+request-time check.
+
+`submitSelectors` (finding B) remains the weakest path, because a selector is
+merged into a domain's shared list without a device quorum. Applying the same
+`COUNT(DISTINCT device_id) >= QUORUM_MIN_DEVICES` gate there is the obvious next
+change; it needs per-device selector rows the way feedback now has them.
+
+### F. `recordFeedback` can suppress working selectors — API, medium — **FIXED in round 2**
 
 I listed this under "reviewed and found sound" for its SQL, and missed what it
 lets a caller do. `fetchSelectors` drops any selector whose hit rate falls below
@@ -212,7 +275,7 @@ misses are enough to delete a working selector from what every user receives —
 cheaper and quieter than poisoning, and it degrades detection rather than
 causing a visible wrong skip. It also writes `selectors.quality` directly.
 
-### G. Free device IDs defeat the anti-sybil measure — API, medium
+### G. Free device IDs defeat the anti-sybil measure — API, medium — **FIXED in round 2**
 
 `fetchTimings` deliberately ranks clusters by `COUNT(DISTINCT device_id)` rather
 than row count, so one prolific submitter cannot decide what a series looks
@@ -225,26 +288,16 @@ This is the strongest argument for finding A. Binding a device ID to a
 server-issued secret is not primarily about protecting one user's settings — it
 is what gives `COUNT(DISTINCT device_id)` its meaning.
 
-### What would actually close the gap
+### Rollout order
 
-In rough order of value per effort:
-
-1. **Device binding (finding A).** Makes identity cost something, restores the
-   sybil defence, and gives you something to ban.
-2. **Quorum with time spread before serving.** Require a selector or window to be
-   backed by N distinct *bound* devices across at least two calendar days before
-   `fetchSelectors` / `fetchTimings` returns it. Time is the one resource a
-   burst cannot fake.
-3. **Split reads from writes.** Reads stay open; every write requires the device
-   secret. Nothing in the extension needs to write before it has registered.
-4. **Per-domain daily write caps and anomaly alerting.** A domain that suddenly
-   receives thousands of feedback rows is worth an email, whatever the source.
-5. **Rotate the API key with the next release.** Only worth doing alongside the
-   above — on its own it buys one release cycle, since the new key ships in the
-   new package.
-
-Per-IP limiting is worth having and does not survive a proxy pool. Treat it as
-the floor, not the answer.
+1. `mysql -u USER -p DBNAME < server/schema_device_binding.sql` — additive only,
+   safe on a live database.
+2. Deploy `api.php` + `config.php`. Cloud sync keeps working for old clients.
+3. Ship the extension update so clients start binding.
+4. Watch `SELECT verified, COUNT(*) FROM timing_windows GROUP BY verified`.
+   When verified dominates, set `REQUIRE_DEVICE_SECRET = true`.
+5. Only then consider rotating `API_KEY` — on its own it buys one release cycle,
+   since the new key ships in the new package.
 
 ---
 
@@ -257,6 +310,11 @@ the floor, not the answer.
   row, local learning unaffected, state cleared on re-arm).
 - Origin allow-list logic exercised against 17 cases including suffix confusion
   and scheme downgrade.
+- `server/threat-model.test.js` ports the API's new decision logic to JS and runs
+  an attacker holding the public key against it: TOFU binding, a 1000-device
+  sybil flood (which took the top cluster before and reaches nobody now), a
+  registered burst confined to one day, selector suppression, owner actions, and
+  the residual case that still succeeds. `node server/threat-model.test.js`.
 - `api.php`, `config.php`, `config.example.php` structurally balanced; every
   constant `api.php` references exists in `config.php`; new functions are
   top-level so PHP hoists them ahead of their call sites.

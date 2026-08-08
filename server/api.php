@@ -61,6 +61,11 @@ if (!is_array($body) || empty($body['action'])) {
 
 $action   = (string) $body['action'];
 $deviceId = isset($body['device_id']) ? sanitize_id($body['device_id']) : null;
+// Token issued by registerDevice and held by that installation. Hex only, so a
+// malformed value can never reach a query as anything but a failed comparison.
+$deviceSecret = isset($body['device_secret'])
+    ? preg_replace('/[^0-9a-f]/i', '', substr((string)$body['device_secret'], 0, 64))
+    : '';
 
 // ── DB connection ─────────────────────────────────────────────────────────────
 $pdo = db_connect();
@@ -82,6 +87,41 @@ if ($action !== 'registerDevice' && $deviceId) {
     check_rate_limit($pdo, $deviceId, RATE_LIMIT_PER_MIN);
 }
 
+// ── Device verification ───────────────────────────────────────────────────────
+// Does this caller hold the token issued for the device id it claims?
+//
+// The answer is not used to reject writes during the rollout — installations
+// that predate device binding have no token and must keep working. It is used
+// to decide whether a write may *influence what other people receive*: only
+// verified rows count toward the quorum in fetchSelectors and fetchTimings.
+// So an attacker minting UUIDs can still fill tables, but cannot reach anyone.
+//
+// Once REQUIRE_DEVICE_SECRET is switched on, unverified writes are refused
+// outright. Flip it after the update has propagated.
+$deviceVerified = ($deviceId && $deviceSecret !== '')
+    ? device_verified($pdo, $deviceId, $deviceSecret)
+    : false;
+
+const SS2_WRITE_ACTIONS = [
+    'submitSelectors', 'recordEvent', 'recordFeedback', 'submitButtonSignature',
+    'recordTiming', 'recordTimingWindow', 'saveSettings',
+];
+const SS2_OWNER_ACTIONS = ['loadSettings', 'saveSettings', 'deleteMyData'];
+
+if (REQUIRE_DEVICE_SECRET && !$deviceVerified
+    && (in_array($action, SS2_WRITE_ACTIONS, true) || in_array($action, SS2_OWNER_ACTIONS, true))) {
+    api_error(403, 'Device not verified — call registerDevice first');
+}
+
+// Reading or erasing a device's own data is an ownership question, not a
+// throughput one, so it is gated as soon as that device has a token to present
+// — independently of the rollout flag above. A device that was never bound has
+// nothing to protect yet.
+if (in_array($action, SS2_OWNER_ACTIONS, true) && $deviceId && !$deviceVerified
+    && device_is_bound($pdo, $deviceId)) {
+    api_error(403, 'This device is bound; device_secret required');
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 switch ($action) {
 
@@ -99,7 +139,32 @@ switch ($action) {
                                      user_agent=VALUES(user_agent)'
         );
         $stmt->execute([$deviceId, $ver, $ua]);
-        api_ok(['registered' => true]);
+
+        // Trust on first use. An unbound id is claimed by whoever registers it
+        // first and is handed a token; from then on that token is what proves
+        // the caller is the same installation. The id alone stops being enough.
+        //
+        // The token is returned exactly once, in this response. Only its hash is
+        // stored, so a database dump cannot be replayed as a set of identities.
+        $cur = $pdo->prepare('SELECT secret FROM devices WHERE id = ?');
+        $cur->execute([$deviceId]);
+        $storedHash = (string)($cur->fetchColumn() ?: '');
+
+        if ($storedHash === '') {
+            $issued = bin2hex(random_bytes(32));
+            $pdo->prepare('UPDATE devices SET secret = ?, bound_at = NOW() WHERE id = ?')
+                ->execute([hash('sha256', $issued), $deviceId]);
+            api_ok(['registered' => true, 'device_secret' => $issued, 'bound' => true]);
+        }
+
+        // Already bound. A matching token re-confirms the binding; a missing or
+        // wrong one is answered without a token and without an error, so an
+        // installation that predates this migration keeps working and simply
+        // stays unverified until it is reinstalled.
+        if ($deviceSecret !== '' && hash_equals($storedHash, hash('sha256', $deviceSecret))) {
+            api_ok(['registered' => true, 'bound' => true]);
+        }
+        api_ok(['registered' => true, 'bound' => false]);
         break;
 
     // ------------------------------------------------------------------
@@ -119,15 +184,27 @@ switch ($action) {
             api_ok(['found' => false]);
         }
 
-        // Filter out skip selectors that have consistently bad feedback
-        // (hit_rate < 20% with at least 5 data points)
+        // Drop skip selectors that have consistently bad feedback.
+        //
+        // The threshold used to read a single running total per selector, which
+        // any caller could move on their own: five submitted misses deleted a
+        // working selector for every user of the domain. Feedback is now one row
+        // per device, only rows from a bound device are counted, and a selector
+        // is not retired until QUORUM_MIN_DEVICES separate devices agree it
+        // fails. Suppression costs the same as poisoning now.
         $skipSelectors = json_decode($row['skip_selectors'] ?? '[]', true);
         if (!empty($skipSelectors)) {
             $fbStmt = $pdo->prepare(
-                'SELECT selector, hits, misses FROM selector_feedback
-                 WHERE domain = ? AND (hits + misses) >= 5'
+                'SELECT selector,
+                        SUM(hits)   AS hits,
+                        SUM(misses) AS misses,
+                        COUNT(DISTINCT device_id) AS devices
+                   FROM selector_feedback
+                  WHERE domain = ? AND verified = 1 AND device_id IS NOT NULL
+                  GROUP BY selector
+                 HAVING devices >= ? AND (SUM(hits) + SUM(misses)) >= 5'
             );
-            $fbStmt->execute([$domain]);
+            $fbStmt->execute([$domain, QUORUM_MIN_DEVICES]);
             $badSelectors = [];
             foreach ($fbStmt->fetchAll(PDO::FETCH_ASSOC) as $fb) {
                 $total = $fb['hits'] + $fb['misses'];
@@ -257,28 +334,38 @@ switch ($action) {
 
         if (!$domain || !$buttonType || !$selector) api_error(400, 'domain, button_type and selector required');
 
+        if (!domain_write_allowed($pdo, $domain)) api_error(429, 'Domain write cap reached');
+
         $hits   = $success ? 1 : 0;
         $misses = $success ? 0 : 1;
         $stmt = $pdo->prepare(
-            'INSERT INTO selector_feedback (domain, button_type, selector, hits, misses, sources)
-             VALUES (?, ?, ?, ?, ?, ?)
+            'INSERT INTO selector_feedback
+               (domain, device_id, button_type, selector, hits, misses, sources, verified)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
-               hits    = hits   + VALUES(hits),
-               misses  = misses + VALUES(misses),
-               sources = VALUES(sources)'
+               hits     = hits   + VALUES(hits),
+               misses   = misses + VALUES(misses),
+               sources  = VALUES(sources),
+               verified = VALUES(verified)'
         );
-        $stmt->execute([$domain, $buttonType, $selector, $hits, $misses, $sources]);
+        $stmt->execute([$domain, $deviceId, $buttonType, $selector,
+                        $hits, $misses, $sources, $deviceVerified ? 1 : 0]);
 
-        // Propagate feedback quality back into the selectors table.
-        // Compute hit_rate across ALL feedback for this domain and adjust quality.
-        // Only do this when enough data exists (>= 5 total feedback entries).
+        // Propagate feedback quality back into the selectors table — but only
+        // from votes that a bound device stands behind, and only once enough
+        // separate devices have weighed in. Otherwise this number is simply
+        // whatever the last caller decided it should be.
         $qStmt = $pdo->prepare(
-            'SELECT SUM(hits) AS total_hits, SUM(hits + misses) AS total_events
-             FROM selector_feedback WHERE domain = ?'
+            'SELECT SUM(hits) AS total_hits,
+                    SUM(hits + misses) AS total_events,
+                    COUNT(DISTINCT device_id) AS devices
+               FROM selector_feedback
+              WHERE domain = ? AND verified = 1 AND device_id IS NOT NULL'
         );
         $qStmt->execute([$domain]);
         $qRow = $qStmt->fetch(PDO::FETCH_ASSOC);
-        if ($qRow && (int)$qRow['total_events'] >= 5) {
+        if ($qRow && (int)$qRow['devices'] >= QUORUM_MIN_DEVICES
+                  && (int)$qRow['total_events'] >= 5) {
             $hitRate = (float)$qRow['total_hits'] / (float)$qRow['total_events'];
             // Blend existing quality (80%) with new empirical hit rate (20%) per update
             $pdo->prepare(
@@ -312,11 +399,12 @@ switch ($action) {
         // sightings raise `observations` instead of inserting another vote, so a
         // single device cannot outweigh the rest of the crowd by volume.
         $stmt = $pdo->prepare(
-            'INSERT INTO timing_windows (series_key, event_type, from_time, to_time, device_id)
-             VALUES (?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE observations = observations + 1'
+            'INSERT INTO timing_windows (series_key, event_type, from_time, to_time, device_id, verified)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE observations = observations + 1,
+                                     verified     = VALUES(verified)'
         );
-        $stmt->execute([$seriesKey, $eventType, $from, $to, $deviceId]);
+        $stmt->execute([$seriesKey, $eventType, $from, $to, $deviceId, $deviceVerified ? 1 : 0]);
         api_ok(['saved' => true]);
         break;
 
@@ -337,10 +425,10 @@ switch ($action) {
         if ($videoTime < 0 || $videoTime > 7200) api_error(400, 'video_time out of range');
 
         $stmt = $pdo->prepare(
-            'INSERT INTO video_timings (series_key, event_type, video_time, device_id)
-             VALUES (?, ?, ?, ?)'
+            'INSERT INTO video_timings (series_key, event_type, video_time, device_id, verified)
+             VALUES (?, ?, ?, ?, ?)'
         );
-        $stmt->execute([$seriesKey, $eventType, $videoTime, $deviceId]);
+        $stmt->execute([$seriesKey, $eventType, $videoTime, $deviceId, $deviceVerified ? 1 : 0]);
         api_ok(['saved' => true]);
         break;
 
@@ -358,12 +446,14 @@ switch ($action) {
             'SELECT event_type,
                     ROUND(AVG(video_time), 1)    AS avg_time,
                     ROUND(STDDEV(video_time), 1) AS stddev_time,
-                    COUNT(*)                     AS samples
+                    COUNT(*)                     AS samples,
+                    COUNT(DISTINCT device_id)    AS devices
              FROM video_timings
-             WHERE series_key = ?
-             GROUP BY event_type'
+             WHERE series_key = ? AND verified = 1
+             GROUP BY event_type
+             HAVING devices >= ?'
         );
-        $stmt->execute([$seriesKey]);
+        $stmt->execute([$seriesKey, QUORUM_MIN_DEVICES]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $windows = [];
@@ -396,14 +486,20 @@ switch ($action) {
             'SELECT event_type,
                     ROUND(AVG(from_time), 1) AS avg_from,
                     ROUND(AVG(to_time),   1) AS avg_to,
-                    COUNT(DISTINCT device_id) AS devices,
-                    COUNT(*)                  AS cnt
+                    COUNT(DISTINCT device_id)        AS devices,
+                    COUNT(DISTINCT DATE(created_at)) AS days,
+                    COUNT(*)                         AS cnt
              FROM timing_windows
-             WHERE series_key = ?
+             WHERE series_key = ? AND verified = 1
              GROUP BY event_type, ROUND(from_time / 30), ROUND(to_time / 30)
+             HAVING devices >= ? AND days >= ?
              ORDER BY event_type, devices DESC, cnt DESC'
         );
-        $winStmt->execute([$seriesKey]);
+        // Ranking by distinct devices only works if a device costs something.
+        // It now does: an id has to be claimed via registerDevice and hold the
+        // token it was issued. The day requirement is the half that a burst
+        // cannot buy at any price — it has to come back tomorrow.
+        $winStmt->execute([$seriesKey, QUORUM_MIN_DEVICES, QUORUM_MIN_DAYS]);
         $exactRows = $winStmt->fetchAll(PDO::FETCH_ASSOC);
 
         $exactByType = [];
@@ -495,12 +591,19 @@ switch ($action) {
         // FK ON DELETE CASCADE handles device_settings automatically,
         // but skip_events, selector_feedback, timing_windows, error_reports
         // and rate_limits are deleted explicitly for maximum transparency.
+        // This list used to name selector_feedback, which had no device_id
+        // column: the DELETE threw, the transaction rolled back, and every user
+        // who pressed "erase my cloud data" got a 500 and kept their data. The
+        // column exists as of schema_device_binding.sql. video_timings was
+        // missing outright, so timing samples survived a deletion that reported
+        // success — the one table an Art. 17 request is most obviously about.
         try {
             $pdo->beginTransaction();
             foreach ([
                 'skip_events',
                 'selector_feedback',
                 'timing_windows',
+                'video_timings',
                 'error_reports',
                 'rate_limits',
                 'device_settings',
@@ -706,6 +809,48 @@ function check_rate_limit(PDO $pdo, string $deviceId, int $limit = RATE_LIMIT_PE
         }
     } catch (PDOException $_) {
         // Don't let rate-limiting errors abort the actual request
+    }
+}
+
+/** Does the caller hold the token this device was bound with? */
+function device_verified(PDO $pdo, string $deviceId, string $secret): bool {
+    if ($secret === '') return false;
+    $stmt = $pdo->prepare('SELECT secret FROM devices WHERE id = ?');
+    $stmt->execute([$deviceId]);
+    $stored = (string)($stmt->fetchColumn() ?: '');
+    if ($stored === '') return false;
+    return hash_equals($stored, hash('sha256', $secret));
+}
+
+/** Has this device ever been issued a token? */
+function device_is_bound(PDO $pdo, string $deviceId): bool {
+    $stmt = $pdo->prepare('SELECT secret IS NOT NULL FROM devices WHERE id = ?');
+    $stmt->execute([$deviceId]);
+    return (bool)$stmt->fetchColumn();
+}
+
+/**
+ * Daily ceiling on writes attributed to one domain, whoever sends them.
+ *
+ * The per-IP limit bounds one address; this bounds the blast radius of a proxy
+ * pool. A domain that legitimately produces thousands of writes a day is also a
+ * domain worth looking at, so the cap doubles as a signal.
+ */
+function domain_write_allowed(PDO $pdo, string $domain): bool {
+    if ($domain === '') return true;
+    try {
+        $pdo->prepare(
+            'INSERT INTO domain_write_caps (domain, day, writes) VALUES (?, CURDATE(), 1)
+             ON DUPLICATE KEY UPDATE writes = writes + 1'
+        )->execute([$domain]);
+        $stmt = $pdo->prepare(
+            'SELECT writes FROM domain_write_caps WHERE domain = ? AND day = CURDATE()'
+        );
+        $stmt->execute([$domain]);
+        return (int)$stmt->fetchColumn() <= DOMAIN_WRITE_CAP_PER_DAY;
+    } catch (PDOException $_) {
+        // Migration not applied yet — do not take the API down over a cap.
+        return true;
     }
 }
 
