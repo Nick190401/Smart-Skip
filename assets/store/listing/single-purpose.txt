@@ -1,0 +1,1 @@
+Smart Skip automatically skips non-content segments — intros, recaps, end credits, ad-skip prompts and next-episode prompts — in video players on supported streaming websites. It does this by detecting the site's own skip button and clicking it, or by seeking past a segment whose start and end it has learned from chapter markers, subtitle cues and the player's own timing data.

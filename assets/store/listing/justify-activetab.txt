@@ -1,0 +1,1 @@
+Backs the Alt+S keyboard shortcut, which asks the extension to scan the player in the tab the user is currently looking at for a skip button right now, instead of waiting for the next scheduled scan. It is only used in response to that explicit user action.

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Smart Skip — small tile</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{overflow:hidden}
+body{
+  background:
+    radial-gradient(ellipse 80% 70% at 88% -20%, rgba(122,110,255,.26) 0%, transparent 62%),
+    radial-gradient(ellipse 70% 60% at 2% 112%, rgba(79,142,247,.20) 0%, transparent 60%),
+    #0a0a16;
+  color:#f0f0fa;
+  font:15px/1.5 'Segoe UI',-apple-system,BlinkMacSystemFont,Inter,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  position:relative;display:flex;
+}
+/* oversized skip glyph, bled off the right edge as a watermark */
+.wm{position:absolute;pointer-events:none;opacity:.055}
+.mark{border-radius:22%;flex:0 0 auto;
+  box-shadow:0 0 0 1px rgba(255,255,255,.11),0 6px 22px rgba(0,0,0,.55)}
+.tile-inner{position:relative;z-index:2;display:flex;flex-direction:column;justify-content:center}
+.wordmark{display:flex;align-items:center;gap:12px}
+.wordmark .name{font-weight:760;letter-spacing:-.6px}
+.tag{border:1px solid rgba(255,255,255,.14);border-radius:99px;background:rgba(255,255,255,.05);
+  color:#9a9ac2;font-weight:650;letter-spacing:.3px}
+.head{font-weight:770;letter-spacing:-1.1px;line-height:1.08;
+  background:linear-gradient(103deg,#ffffff 34%,#bcccff 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.head em{font-style:normal;
+  background:linear-gradient(103deg,#7fb0ff 0%,#c0aaff 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{color:#a4a4c8}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{border-radius:99px;font-weight:700;letter-spacing:.2px;white-space:nowrap;
+  background:rgba(79,142,247,.13);border:1px solid rgba(79,142,247,.30);color:#8fbaff}
+.chip.g{background:rgba(52,211,153,.12);border-color:rgba(52,211,153,.30);color:#4ade9f}
+.chip.p{background:rgba(176,157,255,.13);border-color:rgba(176,157,255,.30);color:#c0aaff}
+</style>
+<style>
+  html,body{width:440px;height:280px}
+  body{padding:26px 30px}
+  .wm{right:-74px;top:40px;width:300px;height:300px}
+  .mark{width:44px;height:44px}
+  .wordmark .name{font-size:24px}
+  .tag{font-size:10px;padding:2.5px 9px}
+  .head{font-size:26px;margin-top:18px}
+  .sub{font-size:12.5px;margin-top:10px;line-height:1.45;max-width:330px}
+  .chips{margin-top:14px}
+  .chip{font-size:10.5px;padding:4px 10px}
+</style></head>
+<body>
+  <svg class="wm" viewBox="0 0 512 512">
+    <path d="M134 155 L134 357 L228 256 Z" fill="#fff"/>
+    <path d="M242 155 L242 357 L336 256 Z" fill="#fff"/>
+    <rect x="350" y="155" width="28" height="202" rx="9" fill="#fff"/>
+  </svg>
+  <div class="tile-inner">
+    <div class="wordmark">
+      <svg viewBox="0 0 512 512" class="mark">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5b9bff"/><stop offset="100%" stop-color="#b09dff"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="#12122a"/>
+  <path d="M134 155 L134 357 L228 256 Z" fill="url(#g)"/>
+  <path d="M242 155 L242 357 L336 256 Z" fill="url(#g)"/>
+  <rect x="350" y="155" width="28" height="202" rx="9" fill="url(#g)"/>
+</svg>
+      <span class="name">Smart Skip</span>
+      <span class="tag">v2.1</span>
+    </div>
+    <div class="head">Intros and recaps,<br><em>skipped for you.</em></div>
+    <div class="sub">On-device AI presses the skip button before you reach for the remote.</div>
+    <div class="chips">
+      <span class="chip">Intro</span>
+      <span class="chip">Recap</span>
+      <span class="chip p">Credits</span>
+      <span class="chip g">20 sites</span>
+    </div>
+  </div>
+</body></html>

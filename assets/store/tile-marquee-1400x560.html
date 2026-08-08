@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Smart Skip — marquee</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{overflow:hidden}
+body{
+  background:
+    radial-gradient(ellipse 80% 70% at 88% -20%, rgba(122,110,255,.26) 0%, transparent 62%),
+    radial-gradient(ellipse 70% 60% at 2% 112%, rgba(79,142,247,.20) 0%, transparent 60%),
+    #0a0a16;
+  color:#f0f0fa;
+  font:15px/1.5 'Segoe UI',-apple-system,BlinkMacSystemFont,Inter,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  position:relative;display:flex;
+}
+/* oversized skip glyph, bled off the right edge as a watermark */
+.wm{position:absolute;pointer-events:none;opacity:.055}
+.mark{border-radius:22%;flex:0 0 auto;
+  box-shadow:0 0 0 1px rgba(255,255,255,.11),0 6px 22px rgba(0,0,0,.55)}
+.tile-inner{position:relative;z-index:2;display:flex;flex-direction:column;justify-content:center}
+.wordmark{display:flex;align-items:center;gap:12px}
+.wordmark .name{font-weight:760;letter-spacing:-.6px}
+.tag{border:1px solid rgba(255,255,255,.14);border-radius:99px;background:rgba(255,255,255,.05);
+  color:#9a9ac2;font-weight:650;letter-spacing:.3px}
+.head{font-weight:770;letter-spacing:-1.1px;line-height:1.08;
+  background:linear-gradient(103deg,#ffffff 34%,#bcccff 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.head em{font-style:normal;
+  background:linear-gradient(103deg,#7fb0ff 0%,#c0aaff 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{color:#a4a4c8}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{border-radius:99px;font-weight:700;letter-spacing:.2px;white-space:nowrap;
+  background:rgba(79,142,247,.13);border:1px solid rgba(79,142,247,.30);color:#8fbaff}
+.chip.g{background:rgba(52,211,153,.12);border-color:rgba(52,211,153,.30);color:#4ade9f}
+.chip.p{background:rgba(176,157,255,.13);border-color:rgba(176,157,255,.30);color:#c0aaff}
+</style>
+<style>
+  html,body{width:1400px;height:560px}
+  body{padding:56px 84px;align-items:center;gap:62px}
+  .mark{width:58px;height:58px}
+  .wordmark .name{font-size:31px}
+  .tag{font-size:12.5px;padding:3.5px 12px}
+  .head{font-size:52px;margin-top:24px}
+  .sub{font-size:18px;margin-top:18px;line-height:1.55;max-width:640px}
+  .chips{margin-top:24px}
+  .chip{font-size:13px;padding:6px 14px}
+  .tile-inner{flex:1;min-width:0}
+
+  .tplayer{position:relative;flex:0 0 470px;height:264px;border-radius:18px;overflow:hidden;z-index:2;
+    background:linear-gradient(150deg,#1d2340 0%,#141428 45%,#0e0e1e 100%);
+    box-shadow:0 34px 76px -20px rgba(0,0,0,.9),0 0 0 1px rgba(255,255,255,.08)}
+  .tplayer::before{content:'';position:absolute;inset:0;
+    background:radial-gradient(ellipse 60% 70% at 30% 28%,rgba(120,150,255,.18),transparent 65%)}
+  .tscene{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    font-size:42px;font-weight:800;letter-spacing:7px;color:rgba(255,255,255,.06)}
+  .thud{position:absolute;top:16px;left:16px;display:inline-flex;align-items:center;gap:7px;
+    white-space:nowrap;padding:7px 13px;border-radius:20px;
+    background:rgba(13,13,13,.88);border:1px solid rgba(255,255,255,.16);
+    font-size:12px;font-weight:650;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.55)}
+  .thud .b{background:#16a34a;padding:2px 8px;border-radius:10px;
+    font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase}
+  .tskip{position:absolute;right:18px;bottom:56px;padding:10px 18px;border-radius:8px;
+    background:rgba(255,255,255,.94);color:#101020;font-size:13.5px;font-weight:750;
+    box-shadow:0 10px 26px rgba(0,0,0,.5)}
+  .tbar{position:absolute;left:18px;right:18px;bottom:22px}
+  .ttrack{height:5px;border-radius:4px;background:rgba(255,255,255,.15);position:relative}
+  .tfill{position:absolute;left:0;top:0;bottom:0;z-index:1;border-radius:4px;background:rgba(255,255,255,.42)}
+  .tseg{position:absolute;top:-2px;bottom:-2px;z-index:2;border-radius:4px;
+    box-shadow:0 0 0 1px rgba(10,10,22,.55);background:rgba(79,142,247,.8)}
+</style></head>
+<body>
+  <div class="tile-inner">
+    <div class="wordmark">
+      <svg viewBox="0 0 512 512" class="mark">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5b9bff"/><stop offset="100%" stop-color="#b09dff"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="#12122a"/>
+  <path d="M134 155 L134 357 L228 256 Z" fill="url(#g)"/>
+  <path d="M242 155 L242 357 L336 256 Z" fill="url(#g)"/>
+  <rect x="350" y="155" width="28" height="202" rx="9" fill="url(#g)"/>
+</svg>
+      <span class="name">Smart Skip</span>
+      <span class="tag">v2.1</span>
+    </div>
+    <div class="head">Intros, recaps and credits,<br><em>gone before you notice.</em></div>
+    <div class="sub">On-device AI finds the skip button and presses it — even when a recap runs straight into the opening, and even on episodes that never show a button at all.</div>
+    <div class="chips">
+      <span class="chip">Netflix</span>
+      <span class="chip">Prime Video</span>
+      <span class="chip">Disney+</span>
+      <span class="chip">Crunchyroll</span>
+      <span class="chip p">and 16 more</span>
+      <span class="chip g">No account needed</span>
+    </div>
+  </div>
+  <div class="tplayer">
+    <div class="tscene">NORTHWIND</div>
+    <div class="thud"><span>⏭</span><span>Intro</span><span class="b">Skipped</span></div>
+    <div class="tskip">Skip Intro</div>
+    <div class="tbar">
+      <div class="ttrack">
+        <div class="tseg" style="left:7%;width:19%"></div>
+        <div class="tfill" style="width:26%"></div>
+      </div>
+    </div>
+  </div>
+</body></html>

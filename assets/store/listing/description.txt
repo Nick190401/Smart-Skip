@@ -1,0 +1,75 @@
+Smart Skip presses the “Skip Intro” button so you don't have to.
+
+It watches the video player, recognises the skip button the moment it appears, works out what kind of segment it belongs to — intro, recap, end credits, an ad, the next-episode prompt — and clicks it. Usually about a second after the button shows up. Then it checks that the skip actually worked, and forgets anything that didn't.
+
+
+WHAT IT SKIPS
+
+• Intros and opening themes
+• Recaps (“Previously on…”)
+• End credits and outros
+• Skip-ad buttons
+• Next-episode prompts, if you want them clicked automatically
+
+Each one is a separate switch, so you can skip the intro and still sit through the credits.
+
+
+RECAP STRAIGHT INTO THE INTRO? BOTH GET SKIPPED
+
+Two segments back to back is where most auto-skippers quietly give up. They press one button and stop looking, so the intro plays out in full right after the recap was skipped.
+
+Smart Skip scans hardest in the seconds right after a jump, because that is exactly when the next button appears. It also follows players that keep one overlay and relabel it from “Skip Recap” to “Skip Intro” instead of swapping in a new button — the case that breaks simple selector matching. In testing, the second segment is caught in roughly a second.
+
+
+NO SKIP BUTTON? IT STILL KNOWS WHERE THE INTRO IS
+
+Plenty of episodes never show a skip button at all. Smart Skip learns where each segment starts and ends — from chapter markers, subtitle and caption cues, the player's own timing data, and the skips you perform yourself — and jumps at the right moment on its own.
+
+It is deliberately careful about this. Episode 5 is not always built like episodes 1 to 3, so a remembered window only triggers an automatic jump when something on the page confirms it live. Otherwise you get a one-tap skip prompt rather than a surprise jump. And every automatic skip shows an Undo button for five seconds — pressing it rewinds you and teaches that window to stop firing.
+
+
+ON-DEVICE AI
+
+Smart Skip uses Gemini Nano, Chrome's built-in on-device model, to read the buttons on the page and decide what each one does. That is what lets it work on layouts nobody wrote a rule for, and in languages nobody wrote a keyword list for — “Intro überspringen”, “Saltar introducción” and “オープニングをスキップ” all land in the right category.
+
+The model runs inside Chrome, on your machine. If it is not enabled on your device, Smart Skip shows you the two Chrome flags to turn it on, and meanwhile falls back to a rule engine covering twelve languages, so it keeps working either way.
+
+
+YOUR RULES, PER SERIES AND PER EPISODE
+
+• Five toggles per show: intro, recap, credits, ads, auto-next
+• Any single episode can override its series
+• Turn the extension off for one site without disabling it everywhere
+• Pause for 15 minutes or an hour when someone else takes the remote
+• Alt+S forces an immediate scan
+• A small overlay in the player shows what was skipped, why, and how confident it was
+• The toolbar icon counts what it skipped today
+
+
+WORKS ON
+
+Netflix, Prime Video, Disney+, Crunchyroll, Max, Paramount+, Hulu, Apple TV+, Peacock, Viki, Funimation, Wakanim, Joyn, Sky, RTL+, ProSieben, ZDF, ARD, Vimeo and Dailymotion.
+
+
+PRIVACY
+
+No account. No sign-in. No email address. Nothing to register.
+
+Out of the box, everything stays on your machine: the buttons it learned, the timings it measured, your per-show settings.
+
+There is one optional feature, off until you switch it on, that shares what Smart Skip learned so other people watching the same series benefit — and so you benefit from what they found. If you turn it on, these are sent under a random device ID that is generated locally and tied to nothing:
+
+• the streaming site's domain
+• which segment type was skipped, and where in the episode
+• the series title and episode label shown by the player
+• the visible text and attributes of the button that was clicked
+• the subtitle line that was on screen at that moment, if subtitles are on
+• your browser's user-agent string and the extension version
+• your extension settings, so they follow you to another machine
+
+You can turn it back off at any time, and there is a button that erases everything ever stored under your device ID from the server.
+
+
+OPEN ABOUT WHAT IT CANNOT DO
+
+Smart Skip clicks buttons and seeks the player. It cannot remove ads that are burned into the video stream, and it cannot skip anything the player refuses to seek past.

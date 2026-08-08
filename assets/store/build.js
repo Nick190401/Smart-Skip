@@ -22,7 +22,7 @@ const LOGO = `<svg viewBox="0 0 512 512" class="mark">
 
 const CSS = `
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html,body{width:1280px;height:800px;overflow:hidden}
+html,body{overflow:hidden}
 body{
   background:
     radial-gradient(ellipse 70% 55% at 78% -12%, rgba(122,110,255,.20) 0%, transparent 62%),
@@ -175,7 +175,8 @@ const FOOT = `<div class="foot">
 </div>`;
 
 const page = (title, stage, wide) => `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>${title}</title><style>${CSS}</style></head>
+<html lang="en"><head><meta charset="utf-8"><title>${title}</title>
+<style>${CSS}</style><style>html,body{width:1280px;height:800px}</style></head>
 <body>
   <div class="brand">
     ${LOGO}
@@ -407,12 +408,16 @@ const s5 = page('Smart Skip — per-series control', `
     </div>
   </div>`, true);
 
+const { tileSmall, tileLarge } = require('./tiles.js');
+
 const shots = [
   ['screenshot-1-auto-skip.html', s1],
   ['screenshot-2-back-to-back.html', s2],
   ['screenshot-3-on-device-ai.html', s3],
   ['screenshot-4-no-button.html', s4],
   ['screenshot-5-control.html', s5],
+  ['tile-small-440x280.html', tileSmall(LOGO)],
+  ['tile-marquee-1400x560.html', tileLarge(LOGO)],
 ];
 for (const [name, html] of shots) {
   fs.writeFileSync(path.join(OUT, name), html, 'utf8');

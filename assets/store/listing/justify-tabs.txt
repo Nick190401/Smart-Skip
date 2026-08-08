@@ -1,0 +1,1 @@
+Used to keep the toolbar badge and the extension state in sync with the player tabs. The extension counts skips per tab so the daily badge number is correct, pushes changed settings to streaming tabs that are already open so a toggle takes effect without a reload, and clears the counters for a tab when that tab is closed. Tab URLs are not collected or transmitted.
