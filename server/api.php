@@ -16,10 +16,26 @@ header('Content-Type: application/json; charset=utf-8');
 require_once __DIR__ . '/config.php';
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
-header('Access-Control-Allow-Origin: '  . ALLOWED_ORIGIN);
+// Reflect only origins this API is actually meant to serve: the extension's own
+// pages, and the streaming sites its content script runs on.
+//
+// What this does and does not buy: CORS governs whether the *response* may be
+// read, not whether the request runs. A hostile page can still POST here and the
+// write still lands — that is what the rate limiting below is for. Reflecting a
+// narrow list stops a drive-by page from reading answers out of this API using a
+// visitor's browser, and stops `*` from being the reason it was easy.
+$originHdr = $_SERVER['HTTP_ORIGIN'] ?? '';
+if (allowed_origin($originHdr)) {
+    header('Access-Control-Allow-Origin: ' . $originHdr);
+    header('Vary: Origin');
+} elseif (defined('ALLOWED_ORIGIN') && ALLOWED_ORIGIN !== '*') {
+    header('Access-Control-Allow-Origin: ' . ALLOWED_ORIGIN);
+}
 header('Access-Control-Allow-Methods: POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, X-SS2-Key');
 header('Access-Control-Max-Age: 86400');
+// The response is JSON and is never meant to be rendered or sniffed as anything else.
+header('X-Content-Type-Options: nosniff');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
@@ -49,9 +65,21 @@ $deviceId = isset($body['device_id']) ? sanitize_id($body['device_id']) : null;
 // ── DB connection ─────────────────────────────────────────────────────────────
 $pdo = db_connect();
 
-// ── Rate-limiting (exception: registerDevice is always allowed) ─────────────
+// ── Rate-limiting ─────────────────────────────────────────────────────────────
+// Two independent buckets, because they stop different things.
+//
+// The per-device bucket keeps a single honest installation from looping, but it
+// cannot stop abuse: device_id is a value the caller invents, so anyone holding
+// the API key — which ships inside the extension and can be read out of the
+// store package by anyone — simply sends a fresh UUID per request and the bucket
+// is never hit twice. The per-IP bucket is the one an attacker cannot opt out
+// of, so it applies to every action including the ones that carry no device_id
+// (getConfig, fetchSelectors, fetchTimings, ping), which were previously
+// unmetered entirely.
+check_rate_limit($pdo, client_ip_bucket(), RATE_LIMIT_PER_IP_PER_MIN);
+
 if ($action !== 'registerDevice' && $deviceId) {
-    check_rate_limit($pdo, $deviceId);
+    check_rate_limit($pdo, $deviceId, RATE_LIMIT_PER_MIN);
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -442,14 +470,9 @@ switch ($action) {
     //  Submit an error report
     // ------------------------------------------------------------------
     case 'reportError':
-        // Rate-limit error reports even without device_id to prevent abuse
-        if ($deviceId) {
-            check_rate_limit($pdo, $deviceId);
-        } else {
-            // Anonymous IP-based rate limit: use hashed IP as pseudo device_id
-            $anonId = 'anon_' . substr(hash('sha256', $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0'), 0, 24);
-            check_rate_limit($pdo, $anonId);
-        }
+        // Both buckets already ran at the top of the request — the per-IP one
+        // unconditionally, the per-device one when a device_id was supplied.
+        // The unsalted hash that used to live here is gone with it.
         $domain   = sanitize_domain($body['domain']  ?? '');
         $message  = substr((string)($body['message'] ?? ''), 0, 1024);
         $urlPath  = substr((string)($body['url']     ?? ''), 0, 512);
@@ -609,7 +632,56 @@ function db_connect(): PDO {
 }
 endif; // db_connect guard
 
-function check_rate_limit(PDO $pdo, string $deviceId): void {
+/**
+ * Origins this API answers to. Extension pages carry a chrome-extension:// (or
+ * moz-extension://) origin; the content script's fetch carries the streaming
+ * site's origin, so those hosts have to be listed too or cloud sync stops
+ * working for every user.
+ */
+function allowed_origin(string $origin): bool {
+    if ($origin === '') return false;
+    if (preg_match('#^(chrome|moz|safari-web)-extension://[a-z0-9\-]+$#i', $origin)) return true;
+
+    $host = parse_url($origin, PHP_URL_HOST);
+    $scheme = parse_url($origin, PHP_URL_SCHEME);
+    if (!$host || $scheme !== 'https') return false;
+
+    static $suffixes = [
+        'netflix.com', 'disneyplus.com', 'primevideo.com', 'crunchyroll.com',
+        'hulu.com', 'apple.com', 'hbomax.com', 'max.com', 'paramountplus.com',
+        'peacocktv.com', 'funimation.com', 'wakanim.tv', 'viki.com',
+        'vimeo.com', 'dailymotion.com',
+        'sky.de', 'joyn.de', 'rtl.de', 'prosieben.de', 'zdf.de', 'ard.de',
+        'smartskipv2.kernelminds.de',
+    ];
+    // substr() rather than str_ends_with(): that is a PHP 8 function and it
+    // would be the only one in this codebase, quietly raising the minimum
+    // version the API runs on.
+    foreach ($suffixes as $s) {
+        $dotted = '.' . $s;
+        if ($host === $s || substr($host, -strlen($dotted)) === $dotted) return true;
+    }
+    // Amazon runs Prime Video on ~15 country domains; match the family rather
+    // than enumerating every TLD and getting one wrong.
+    if (preg_match('#(^|\.)amazon\.[a-z.]{2,7}$#', $host)) return true;
+    return false;
+}
+
+/**
+ * Rate-limit key for the caller's IP. Hashed with the API key as salt so the
+ * rate_limits table never holds a raw address — it is the one identifier here
+ * that is personal data.
+ *
+ * REMOTE_ADDR only. X-Forwarded-For is caller-supplied and would hand every
+ * attacker an unlimited supply of buckets; if this ever runs behind a proxy,
+ * read the proxy's own trusted header here instead.
+ */
+function client_ip_bucket(): string {
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    return 'ip_' . substr(hash_hmac('sha256', $ip, API_KEY), 0, 28);
+}
+
+function check_rate_limit(PDO $pdo, string $deviceId, int $limit = RATE_LIMIT_PER_MIN): void {
     $window = (int)floor(time() / 60);
     try {
         $pdo->prepare(
@@ -623,7 +695,7 @@ function check_rate_limit(PDO $pdo, string $deviceId): void {
         $stmt->execute([$deviceId, $window]);
         $count = (int)($stmt->fetchColumn() ?: 0);
 
-        if ($count > RATE_LIMIT_PER_MIN) {
+        if ($count > $limit) {
             api_error(429, 'Rate limit exceeded');
         }
 

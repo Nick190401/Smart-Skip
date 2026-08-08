@@ -14,13 +14,12 @@
   "permissions": [
     "storage",
     "activeTab",
-    "scripting",
     "tabs"
   ],
 
-  "trial_tokens": [
-    "Alr+QJJFRediw1PyKVzcED6ehCSfc+lFlCwjVxjQsUjfIxUSVgmR7kT+xgIm+X/El522w8w1D65Go3jlM1+6yg4AAAB7eyJvcmlnaW4iOiJjaHJvbWUtZXh0ZW5zaW9uOi8vZGZvaWVvbGphaGhrbW9lYW5mbmhscGRobmllaHBwZWkiLCJmZWF0dXJlIjoiQUlQcm9tcHRBUElNdWx0aW1vZGFsSW5wdXQiLCJleHBpcnkiOjE3ODE1NjgwMDB9"
-  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+  },
 
   "host_permissions": [
     "*://*.netflix.com/*",

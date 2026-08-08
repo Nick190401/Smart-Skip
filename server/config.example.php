@@ -25,6 +25,26 @@ define('DB_PASS', 'YOUR_DATABASE_PASSWORD');         // ← ersetzen
 // Derselbe Wert muss in src-v2/content/sync-service.js als SYNC_API_KEY stehen.
 define('API_KEY', 'YOUR_RANDOM_API_KEY_MIN_32_CHARS'); // ← ersetzen
 
+// ── CORS ──────────────────────────────────────────────────────────────────────
+// Fallback. api.php spiegelt selbst nur Extension-Origins und die
+// unterstuetzten Streaming-Hosts zurueck (allowed_origin() dort). Dieser Wert
+// greift nur, wenn er NICHT '*' ist.
+define('ALLOWED_ORIGIN', '*');
+
+// ── Rate-Limiting ─────────────────────────────────────────────────────────────
+// Pro device_id und Minute. Bremst eine ehrliche Installation, mehr nicht:
+// die device_id waehlt der Aufrufer selbst.
+define('RATE_LIMIT_PER_MIN', 120);
+
+// Pro IP und Minute, ueber ALLE Actions — auch die ohne device_id. Die IP kann
+// der Aufrufer nicht frei waehlen, das ist also das Limit, das er nicht durch
+// eine neue UUID pro Request umgehen kann. Grosszuegig: ein Haushalt hinter
+// einem NAT teilt sich eine IP.
+define('RATE_LIMIT_PER_IP_PER_MIN', 300);
+
+// ── Entwicklungsmodus ─────────────────────────────────────────────────────────
+define('DEBUG_MODE', false);   // true = DB-Fehlerdetails in der Response
+
 // ── Optionale Einstellungen ───────────────────────────────────────────────────
 // Maximale Einträge die vor dem Aufräumen gespeichert werden
 define('MAX_SELECTOR_ENTRIES', 500);

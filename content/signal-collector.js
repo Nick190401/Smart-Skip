@@ -26,6 +26,11 @@ class SignalCollector {
     // dedup: don't record the same window twice in one session
     this._recordedWindows = new Set();
 
+    // Upload gating (see _uploadAllowed): windows an OBSERVED source has
+    // confirmed, and page-declared windows parked until one does.
+    this._observed       = new Set();
+    this._heldForUpload  = new Map();
+
     // XHR/fetch bridge
     this._messageHandler = null;
     this._injected       = false;
@@ -46,6 +51,8 @@ class SignalCollector {
     this._epKey     = epKey;
     this._armed     = true;
     this._recordedWindows.clear();
+    this._observed.clear();
+    this._heldForUpload.clear();
 
     this._injectPageScript();
     this._startMessageBridge();
@@ -68,6 +75,8 @@ class SignalCollector {
 
     this._skipButtonRegistry.clear();
     this._recordedWindows.clear();
+    this._observed.clear();
+    this._heldForUpload.clear();
 
     // Destroy + reset AI XHR fallback state so next arm() starts fresh
     if (this._aiSession) { try { this._aiSession.destroy(); } catch {} }
@@ -755,6 +764,56 @@ class SignalCollector {
     this._record(type, from, to, source);
   }
 
+  // ── Trust tiers ───────────────────────────────────────────────────────────
+  //
+  // OBSERVED — read off something the browser itself rendered or decoded: a
+  // marker element with a computed position, a cue in a media text track, a
+  // skip button that appeared and disappeared, a click that verifiably moved
+  // the playhead. A page can influence these, but not by simply declaring a
+  // number in a variable.
+  //
+  // DECLARED — read out of JavaScript state or a network body: window globals,
+  // inline JSON, XHR/fetch/WebSocket payloads relayed by the page-context
+  // interceptor. The nonce on that bridge keeps unrelated scripts from posting
+  // into it, but it cannot make the page itself honest — and `window.__INITIAL_
+  // STATE__` is writable by any script on the origin, no bridge involved. These
+  // are used locally and held back from the crowd database until an OBSERVED
+  // source agrees.
+  static OBSERVED_SOURCES = new Set([
+    'chapter-dom', 'track-cue', 'progress-segment', 'progress-heuristic',
+    'button-lifecycle', 'button-click', 'button-click-nav',
+  ]);
+
+  /**
+   * May this window be uploaded to the shared database?
+   * OBSERVED goes up immediately and retroactively releases any DECLARED window
+   * covering the same range; DECLARED waits for that to happen.
+   */
+  _uploadAllowed(type, from, to, source) {
+    const key = `${type}:${Math.round(from / 15)}`;
+    if (SignalCollector.OBSERVED_SOURCES.has(source)) {
+      this._observed.add(key);
+      // Release anything that was parked on exactly this window earlier.
+      const held = this._heldForUpload.get(key);
+      if (held) {
+        this._heldForUpload.delete(key);
+        // Label it with both halves: what claimed the window and what confirmed
+        // it. "xhr" alone would read as if the page had been believed outright.
+        const label = `${held.source}+${source}`;
+        syncService.recordTimingWindow(this._seriesKey, held.type, held.from, held.to, label);
+        if (this._epKey) syncService.recordTimingWindow(this._epKey, held.type, held.from, held.to, label);
+        console.info(`[SmartSkip signal] released held ${held.type} ${held.from}→${held.to}s — corroborated by ${source}`);
+      }
+      return true;
+    }
+    if (this._observed.has(key)) return true;
+    if (this._heldForUpload.size < 32) {
+      this._heldForUpload.set(key, { type, from, to, source });
+    }
+    console.info(`[SmartSkip signal] holding ${type} ${from}→${to}s (${source}) — page-declared, not yet corroborated`);
+    return false;
+  }
+
   // ── Recording ─────────────────────────────────────────────────────────────
 
   _record(type, from, to, source) {
@@ -763,6 +822,12 @@ class SignalCollector {
     from = Math.round(from);
     to   = Math.round(to);
     if (to <= from || to - from > 1200 || from < 0) return;
+
+    // Trust is evaluated before the dedup guard on purpose. An observed source
+    // reporting a window a page-declared source already reported is precisely
+    // the corroboration _uploadAllowed is waiting for — returning early on the
+    // duplicate would throw that away and the held window would never be freed.
+    const mayUpload = this._uploadAllowed(type, from, to, source);
 
     // dedup: same type + same from/to (±5 s) within this session
     const dedupKey = `${type}:${Math.round(from/5)}:${Math.round(to/5)}`;
@@ -777,8 +842,18 @@ class SignalCollector {
     learningStore.recordTimingWindow(this._seriesKey, type, from, to, 1, meta);
     if (this._epKey) learningStore.recordTimingWindow(this._epKey, type, from, to, 1, meta);
 
-    syncService.recordTimingWindow(this._seriesKey, type, from, to, source);
-    if (this._epKey) syncService.recordTimingWindow(this._epKey, type, from, to, source);
+    // Uploading is a separate decision from recording. A window read out of
+    // page-controlled JavaScript is only ever as trustworthy as the script that
+    // put it there, and on a streaming site that includes every third-party tag
+    // on the page. Locally that costs at most one bad skip, which the user can
+    // undo; in the shared database it becomes everyone's bad skip. So the
+    // untrusted tiers stay on this device until something we can actually see —
+    // a rendered marker, a media text track, a skip that demonstrably worked —
+    // reports the same window.
+    if (mayUpload) {
+      syncService.recordTimingWindow(this._seriesKey, type, from, to, source);
+      if (this._epKey) syncService.recordTimingWindow(this._epKey, type, from, to, source);
+    }
 
     console.info(`[SmartSkip signal] ${type} ${from}→${to}s (${source})`);
     // Hand the window to TimingSkipper as *live* evidence for this episode —
