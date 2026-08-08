@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Smart Skip — per-series control</title><style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1280px;height:800px;overflow:hidden}
+body{
+  background:
+    radial-gradient(ellipse 70% 55% at 78% -12%, rgba(122,110,255,.20) 0%, transparent 62%),
+    radial-gradient(ellipse 60% 50% at 8% 108%, rgba(79,142,247,.16) 0%, transparent 60%),
+    #0a0a16;
+  color:#f0f0fa;
+  font:15px/1.55 'Segoe UI',-apple-system,BlinkMacSystemFont,Inter,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  display:flex;flex-direction:column;
+  padding:34px 48px 30px;
+}
+body::after{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),
+                   linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);
+  background-size:56px 56px;
+  mask-image:radial-gradient(ellipse 90% 80% at 50% 40%,#000 20%,transparent 80%);
+}
+
+/* ── brand bar ─────────────────────────────────────────── */
+.brand{display:flex;align-items:center;gap:13px;position:relative;z-index:2}
+.mark{width:40px;height:40px;border-radius:11px;flex:0 0 auto;
+      box-shadow:0 0 0 1px rgba(255,255,255,.10),0 4px 16px rgba(0,0,0,.5)}
+.brand-name{font-size:19px;font-weight:750;letter-spacing:-.35px}
+.brand-ver{font-size:11.5px;font-weight:650;letter-spacing:.3px;color:#8f8fb8;
+  border:1px solid rgba(255,255,255,.12);border-radius:99px;padding:3px 10px;background:rgba(255,255,255,.045)}
+.brand-spacer{flex:1}
+.brand-tag{font-size:13px;color:#7d7da4;letter-spacing:.1px}
+
+/* ── layout ────────────────────────────────────────────── */
+.stage{flex:1;display:grid;grid-template-columns:1fr 450px;gap:36px;align-items:center;
+       position:relative;z-index:2}
+.stage.wide{grid-template-columns:1fr 420px}
+.copy h2{font-size:36px;line-height:1.14;font-weight:760;letter-spacing:-1.05px;
+         background:linear-gradient(103deg,#ffffff 30%,#b6c8ff 100%);
+         -webkit-background-clip:text;background-clip:text;color:transparent}
+.copy h2 em{font-style:normal;
+  background:linear-gradient(103deg,#7fb0ff 0%,#c0aaff 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.copy p{margin-top:16px;font-size:16px;line-height:1.6;color:#a2a2c6;max-width:450px}
+.points{margin-top:26px;display:flex;flex-direction:column;gap:11px}
+.point{display:flex;align-items:flex-start;gap:11px;font-size:14.5px;color:#c9c9e4}
+.point .tick{flex:0 0 auto;width:19px;height:19px;border-radius:50%;margin-top:1px;
+  background:rgba(52,211,153,.14);border:1px solid rgba(52,211,153,.36);
+  color:#34d399;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center}
+.point b{color:#f0f0fa;font-weight:650}
+
+/* ── player mockup ─────────────────────────────────────── */
+.player{position:relative;border-radius:16px;overflow:hidden;aspect-ratio:16/9;
+  background:linear-gradient(150deg,#1d2340 0%,#141428 45%,#0e0e1e 100%);
+  box-shadow:0 30px 70px -18px rgba(0,0,0,.85),0 0 0 1px rgba(255,255,255,.075)}
+.player::before{content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse 60% 70% at 30% 30%,rgba(120,150,255,.16),transparent 65%)}
+.scene{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:76px;font-weight:800;letter-spacing:10px;color:rgba(255,255,255,.055)}
+.ptop{position:absolute;top:18px;left:20px;right:20px;display:flex;align-items:flex-start;gap:12px}
+.ptitle{font-size:15px;font-weight:700;letter-spacing:-.2px;color:rgba(255,255,255,.92)}
+.psub{font-size:11.5px;color:rgba(255,255,255,.44);margin-top:2px}
+
+.skipbtn{position:absolute;right:22px;bottom:78px;
+  display:inline-flex;align-items:center;gap:8px;
+  padding:11px 19px;border-radius:8px;
+  background:rgba(255,255,255,.94);color:#101020;
+  font-size:14px;font-weight:750;letter-spacing:-.1px;
+  box-shadow:0 10px 26px rgba(0,0,0,.5)}
+.skipbtn.ghost{background:rgba(255,255,255,.13);color:rgba(255,255,255,.82);
+  border:1px solid rgba(255,255,255,.22);box-shadow:none}
+
+.pbar{position:absolute;left:20px;right:20px;bottom:26px}
+.shot-left{display:flex;flex-direction:column;gap:14px}
+.note{display:flex;align-items:center;gap:0;
+  background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.075);
+  border-radius:13px;padding:13px 4px}
+.note-cell{flex:1;padding:0 18px;border-right:1px solid rgba(255,255,255,.07)}
+.note-cell:last-child{border-right:0}
+.note-k{font-size:9.5px;font-weight:750;letter-spacing:.8px;text-transform:uppercase;color:#5f5f85}
+.note-v{font-size:14px;font-weight:650;margin-top:3px;color:#dcdcf0;font-variant-numeric:tabular-nums}
+.note-v.ok{color:#34d399}.note-v.ai{color:#b09dff}.note-v.warn{color:#fbbf24}
+.ptrack{height:5px;border-radius:4px;background:rgba(255,255,255,.15);position:relative}
+.pfill{position:absolute;left:0;top:0;bottom:0;z-index:1;border-radius:4px;
+  background:rgba(255,255,255,.42)}
+.pseg{position:absolute;top:-2px;bottom:-2px;z-index:2;border-radius:4px;
+  box-shadow:0 0 0 1px rgba(10,10,22,.55)}
+.pseg.intro{background:rgba(79,142,247,.75)}
+.pseg.recap{background:rgba(251,191,36,.75)}
+.pseg.credits{background:rgba(176,157,255,.7)}
+.ptimes{display:flex;justify-content:space-between;margin-top:8px;
+  font-size:11px;color:rgba(255,255,255,.42);font-variant-numeric:tabular-nums}
+.plabels{position:relative;height:15px;margin-bottom:7px}
+.plabel{position:absolute;top:0;transform:translateX(-50%);white-space:nowrap;
+  font-size:9.5px;font-weight:750;letter-spacing:.55px;text-transform:uppercase}
+.plabel.intro{color:#7fb0ff}.plabel.recap{color:#fbbf24}.plabel.credits{color:#c0aaff}
+
+/* HUD chip, mirrors the real in-player overlay */
+.hud{position:absolute;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;
+  padding:7px 13px;border-radius:20px;
+  background:rgba(13,13,13,.86);border:1px solid rgba(255,255,255,.16);
+  font-size:12px;font-weight:650;color:#fff;
+  box-shadow:0 8px 24px rgba(0,0,0,.55)}
+.hud .badge{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:800;
+  letter-spacing:.5px;text-transform:uppercase}
+.badge.skip{background:#16a34a}
+.badge.ai{background:#7c3aed}
+.badge.undo{background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.36)}
+
+/* ── generic cards ─────────────────────────────────────── */
+.panel{background:rgba(255,255,255,.038);border:1px solid rgba(255,255,255,.08);
+  border-radius:16px;padding:20px 22px}
+.panel-h{font-size:10.5px;font-weight:750;letter-spacing:.9px;text-transform:uppercase;
+  color:#6f6f96;margin-bottom:14px}
+
+.xlate{display:flex;flex-direction:column;gap:9px}
+.xrow{display:flex;align-items:center;gap:12px}
+.xbtn{flex:0 0 214px;padding:8px 13px;border-radius:7px;font-size:13px;font-weight:650;
+  background:rgba(255,255,255,.9);color:#101020;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.xarrow{color:#5a5a80;font-size:14px}
+.xtag{padding:4px 11px;border-radius:99px;font-size:11.5px;font-weight:750;letter-spacing:.3px}
+.xtag.intro{background:rgba(79,142,247,.16);color:#7fb0ff;border:1px solid rgba(79,142,247,.34)}
+.xtag.recap{background:rgba(251,191,36,.15);color:#fbbf24;border:1px solid rgba(251,191,36,.32)}
+.xtag.next{background:rgba(52,211,153,.14);color:#34d399;border:1px solid rgba(52,211,153,.32)}
+.xtag.credits{background:rgba(176,157,255,.16);color:#c0aaff;border:1px solid rgba(176,157,255,.34)}
+
+/* toggle rows for the settings shot */
+.trow{display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:11px 0;border-bottom:1px solid rgba(255,255,255,.055)}
+.trow:last-child{border-bottom:0}
+.tlabel{font-size:14px;font-weight:600}
+.tdesc{font-size:11.5px;color:#6f6f96;margin-top:1px}
+.sw{width:38px;height:22px;border-radius:99px;position:relative;flex:0 0 auto;
+  background:rgba(255,255,255,.11);border:1px solid rgba(255,255,255,.1)}
+.sw::after{content:'';position:absolute;top:2.5px;left:3px;width:16px;height:16px;border-radius:50%;
+  background:#8e8eb4}
+.sw.on{background:rgba(79,142,247,.85);border-color:rgba(79,142,247,.9);
+  box-shadow:0 0 14px rgba(79,142,247,.45)}
+.sw.on::after{left:auto;right:3px;background:#fff}
+
+/* ── footer strip ──────────────────────────────────────── */
+.foot{position:relative;z-index:2;margin-top:26px;padding-top:16px;
+  border-top:1px solid rgba(255,255,255,.07);
+  display:flex;align-items:center;gap:14px}
+.foot-label{font-size:10.5px;font-weight:750;letter-spacing:.85px;text-transform:uppercase;color:#5f5f85;flex:0 0 auto}
+.foot-list{font-size:12.5px;color:#8888ae;letter-spacing:.05px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.foot-list b{color:#b9b9d6;font-weight:600}
+</style></head>
+<body>
+  <div class="brand">
+    <svg viewBox="0 0 512 512" class="mark">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5b9bff"/><stop offset="100%" stop-color="#b09dff"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="#12122a"/>
+  <path d="M134 155 L134 357 L228 256 Z" fill="url(#g)"/>
+  <path d="M242 155 L242 357 L336 256 Z" fill="url(#g)"/>
+  <rect x="350" y="155" width="28" height="202" rx="9" fill="url(#g)"/>
+</svg>
+    <div>
+      <div class="brand-name">Smart Skip</div>
+    </div>
+    <span class="brand-ver">v2.1</span>
+    <span class="brand-spacer"></span>
+    <span class="brand-tag">Auto-skip for streaming · on-device AI</span>
+  </div>
+  <div class="stage wide">
+  <div>
+    <div class="panel">
+      <div class="panel-h">Northwind — Season 2, Episode 4</div>
+      <div class="trow">
+        <div><div class="tlabel">Skip intro</div><div class="tdesc">Opening / theme</div></div>
+        <div class="sw on"></div>
+      </div>
+      <div class="trow">
+        <div><div class="tlabel">Skip recap</div><div class="tdesc">“Previously on…”</div></div>
+        <div class="sw on"></div>
+      </div>
+      <div class="trow">
+        <div><div class="tlabel">Skip credits</div><div class="tdesc">Outro — off, this show has post-credit scenes</div></div>
+        <div class="sw"></div>
+      </div>
+      <div class="trow">
+        <div><div class="tlabel">Skip ads</div><div class="tdesc">Skip-ad buttons</div></div>
+        <div class="sw on"></div>
+      </div>
+      <div class="trow">
+        <div><div class="tlabel">Auto next episode</div><div class="tdesc">Start the next one without asking</div></div>
+        <div class="sw"></div>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:16px;display:flex;align-items:center;gap:12px;padding:15px 22px">
+      <span class="xtag intro">Pause 15 min</span>
+      <span class="xtag intro">Pause 1 h</span>
+      <span class="xtag recap">Off for this site</span>
+      <span style="font-size:12.5px;color:#7d7da4;margin-left:auto">Alt + S — scan now</span>
+    </div>
+  </div>
+  <div class="copy">
+    <h2>Your rules — <em>per series, per episode.</em></h2>
+    <p>Skip the intro but sit through the credits. Turn everything off for one site. Pause for an hour when someone else takes the remote. Every switch is per show, and any single episode can override it.</p>
+    <div class="points">
+      <div class="point"><span class="tick">✓</span><span>Live overlay shows <b>what was skipped and why</b></span></div>
+      <div class="point"><span class="tick">✓</span><span>Daily counter on the toolbar icon</span></div>
+      <div class="point"><span class="tick">✓</span><span>Delete everything the extension learned, per site or entirely</span></div>
+    </div>
+  </div></div>
+  <div class="foot">
+  <span class="foot-label">Works on</span>
+  <span class="foot-list"><b>Netflix · Prime Video · Disney+ · Crunchyroll · Max · Paramount+ · Hulu · Apple TV+ · Peacock · Joyn · Sky · RTL+ · ZDF · ARD</b> and 6 more</span>
+</div>
+</body></html>
