@@ -20,6 +20,8 @@ class SignalCollector {
     // button lifecycle tracking
     this._skipButtonRegistry = new Map(); // element → { type, appearedAt }
     this._buttonObserver     = null;
+    this._buttonSweepTimer   = null;
+    this._evaluateButton     = null;  // set by _startButtonObserver
 
     // dedup: don't record the same window twice in one session
     this._recordedWindows = new Set();
@@ -61,6 +63,8 @@ class SignalCollector {
     if (this._buttonObserver)  { this._buttonObserver.disconnect(); this._buttonObserver  = null; }
     if (this._messageHandler)  { window.removeEventListener('message', this._messageHandler); this._messageHandler = null; }
     if (this._chapterPollTimer){ clearInterval(this._chapterPollTimer); this._chapterPollTimer = null; }
+    if (this._buttonSweepTimer){ clearInterval(this._buttonSweepTimer); this._buttonSweepTimer = null; }
+    this._evaluateButton = null;
 
     this._skipButtonRegistry.clear();
     this._recordedWindows.clear();
@@ -308,7 +312,7 @@ class SignalCollector {
   }
 
   _readChapterMarkers() {
-    const video = document.querySelector('video');
+    const video = ssMedia.activeVideo();
     if (!video?.duration) return;
     const dur = video.duration;
 
@@ -352,7 +356,7 @@ class SignalCollector {
   }
 
   _readTrackCues() {
-    const video = document.querySelector('video');
+    const video = ssMedia.activeVideo();
     if (!video) return;
     for (const track of video.textTracks) {
       if (track.kind !== 'chapters' && track.kind !== 'metadata') continue;
@@ -416,7 +420,7 @@ class SignalCollector {
   // Even without any label, the *first* boundary in the first 5 min is almost
   // always the intro end, and the *last* boundary near the end is credits.
   _readProgressBarSegments() {
-    const video = document.querySelector('video');
+    const video = ssMedia.activeVideo();
     if (!video?.duration || video.duration < 480) return;
     const dur = video.duration;
 
@@ -553,10 +557,23 @@ class SignalCollector {
       return SKIP_WORDS.test(text);
     };
 
-    const onAppear = (el) => {
-      const type = getType(el);
+    // Appearing is not the same as being inserted. Most players mount their
+    // overlay once and toggle opacity/display, so a purely childList-driven
+    // observer never sees the button show up and `from` falls back to click
+    // time — which is seconds into the segment.
+    const isShown = (el) => {
+      if (!el || !el.isConnected) return false;
+      const s = getComputedStyle(el);
+      if (s.display === 'none' || s.visibility === 'hidden') return false;
+      if (parseFloat(s.opacity || '1') < 0.05) return false;
+      if (el.getAttribute('aria-hidden') === 'true') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    };
+
+    const onAppear = (el, type) => {
       if (!type) return;
-      const video = document.querySelector('video');
+      const video = ssMedia.activeVideo();
       if (!video || video.paused || video.currentTime < 1) return;
       // Also capture the active subtitle text at this moment — it is the most
       // accurate context for what the intro/credits segment looks like textually.
@@ -568,14 +585,14 @@ class SignalCollector {
       const entry = this._skipButtonRegistry.get(el);
       if (!entry) return;
       this._skipButtonRegistry.delete(el);
-      const video = document.querySelector('video');
+      const video = ssMedia.activeVideo();
       if (!video) return;
       const { type, appearedAt: from } = entry;
       // Defer the currentTime read by ~400 ms so that a seek triggered by the
       // button click has time to execute.  Reading synchronously would capture
       // the pre-seek position, giving a useless {from ≈ to} window.
       setTimeout(() => {
-        const vid = document.querySelector('video');
+        const vid = ssMedia.activeVideo();
         const to  = vid ? vid.currentTime : video.currentTime;
         // only record if window is plausible (5 s–1200 s)
         if (to - from >= 5 && to - from <= 1200) {
@@ -584,29 +601,58 @@ class SignalCollector {
       }, 400);
     };
 
+    /**
+     * Single decision point for one element: register it, retire it, or — the
+     * case that used to be missed entirely — retire and re-register because the
+     * player relabelled the same node from "Skip Recap" to "Skip Intro". Without
+     * this, the intro window is recorded starting at the recap's timestamp.
+     */
+    const evaluate = (el) => {
+      const known = this._skipButtonRegistry.get(el);
+      if (!looksLikeSkipButton(el) || !isShown(el)) {
+        if (known) onDisappear(el);
+        return;
+      }
+      const type = getType(el);
+      if (!type) { if (known) onDisappear(el); return; }
+      if (!known) { onAppear(el, type); return; }
+      if (known.type !== type) {
+        onDisappear(el);
+        // The relabel usually lands before the seek that closed the previous
+        // segment. Reading currentTime now would stamp the new segment with the
+        // old segment's start; wait for the playhead to settle, same as
+        // onDisappear does.
+        setTimeout(() => {
+          if (!this._armed || this._skipButtonRegistry.has(el)) return;
+          if (!looksLikeSkipButton(el) || !isShown(el)) return;
+          onAppear(el, getType(el));
+        }, 450);
+      }
+    };
+    this._evaluateButton = evaluate;
+
+    const evaluateTree = (node) => {
+      if (!node || node.nodeType !== 1) return;
+      evaluate(node);
+      let kids;
+      try { kids = node.querySelectorAll('button, [role="button"], a'); } catch { return; }
+      for (const child of kids) evaluate(child);
+    };
+
     this._buttonObserver = new MutationObserver((mutations) => {
       if (!this._armed) return;
       for (const m of mutations) {
-        for (const node of m.addedNodes) {
-          if (looksLikeSkipButton(node)) onAppear(node);
-          // also check subtree
-          if (node.nodeType === 1) {
-            for (const child of node.querySelectorAll('button, [role="button"], a')) {
-              if (looksLikeSkipButton(child)) onAppear(child);
-            }
-          }
-        }
+        for (const node of m.addedNodes) evaluateTree(node);
         for (const node of m.removedNodes) {
           if (this._skipButtonRegistry.has(node)) onDisappear(node);
         }
-        // attribute changes: element became hidden
-        if (m.type === 'attributes' && this._skipButtonRegistry.has(m.target)) {
-          const el = m.target;
-          const style = getComputedStyle(el);
-          if (style.display === 'none' || style.visibility === 'hidden' ||
-              parseFloat(style.opacity) < 0.05) {
-            onDisappear(el);
-          }
+        if (m.type === 'attributes') evaluate(m.target);
+        // Label swap on a reused overlay node arrives as a characterData change
+        // on the text node, which never surfaces as an attribute or childList
+        // mutation of the button itself.
+        if (m.type === 'characterData') {
+          const owner = m.target.parentElement?.closest('button, [role="button"], a');
+          if (owner) evaluate(owner);
         }
       }
     });
@@ -615,14 +661,53 @@ class SignalCollector {
       childList:       true,
       subtree:         true,
       attributes:      true,
-      attributeFilter: ['style', 'class', 'hidden', 'aria-hidden'],
+      characterData:   true,
+      attributeFilter: ['style', 'class', 'hidden', 'aria-hidden', 'aria-label', 'data-t', 'data-uia'],
     });
+
+    this._startButtonSweep(evaluate, looksLikeSkipButton);
+  }
+
+  /**
+   * Catch-all pass over the player's buttons once a second. CSS-only reveals
+   * (a class on an ancestor, a keyframe animation finishing) change no
+   * attribute on the button itself, so the observer above cannot see them.
+   */
+  _startButtonSweep(evaluate, looksLikeSkipButton) {
+    if (this._buttonSweepTimer) clearInterval(this._buttonSweepTimer);
+    this._buttonSweepTimer = setInterval(() => {
+      if (!this._armed) return;
+      try {
+        for (const el of document.querySelectorAll('button, [role="button"], a[role], [data-t], [data-uia]')) {
+          if (looksLikeSkipButton(el) || this._skipButtonRegistry.has(el)) evaluate(el);
+        }
+        // Nodes detached without a removedNodes record still hold a window open.
+        for (const el of [...this._skipButtonRegistry.keys()]) {
+          if (!el.isConnected) evaluate(el);
+        }
+      } catch {}
+    }, 1000);
   }
 
   // called from skipper._click() so we can use button-appear time as `from`
   // instead of the (always-late) click time
   getButtonAppearTime(el) {
     return this._skipButtonRegistry.get(el)?.appearedAt ?? null;
+  }
+
+  /**
+   * Re-run lifecycle detection immediately instead of waiting for the 1 s sweep.
+   * Called right after a skip, when a relabelled overlay ("Skip Recap" →
+   * "Skip Intro") has to be picked up as a new segment within milliseconds.
+   */
+  refreshButtons() {
+    if (!this._armed || !this._evaluateButton) return;
+    try {
+      for (const el of document.querySelectorAll('button, [role="button"], a[role], [data-t], [data-uia]')) {
+        this._evaluateButton(el);
+      }
+      for (const el of [...this._skipButtonRegistry.keys()]) this._evaluateButton(el);
+    } catch {}
   }
 
   /**
@@ -688,7 +773,7 @@ class SignalCollector {
     // the series bucket cannot tell three episodes agreeing apart from one
     // episode reported three times — the difference between a real pattern and
     // a phantom one.
-    const meta = { epKey: this._epKey || null, duration: document.querySelector('video')?.duration };
+    const meta = { epKey: this._epKey || null, duration: ssMedia.activeVideo()?.duration };
     learningStore.recordTimingWindow(this._seriesKey, type, from, to, 1, meta);
     if (this._epKey) learningStore.recordTimingWindow(this._epKey, type, from, to, 1, meta);
 

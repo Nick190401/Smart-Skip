@@ -843,6 +843,11 @@ function applySeriesInfo(series) {
 function _renderTimingChips(status) {
   if (!el.timingChips) return;
   if (!status?.windows?.length) { el.timingChips.innerHTML = ''; return; }
+
+  // ss2_timing_status is a single storage slot describing whatever the content
+  // script last armed. Rendering it unconditionally meant the last series you
+  // watched kept showing its chips on every other site and series afterwards.
+  if (status.seriesKey !== currentSeriesKey()) { el.timingChips.innerHTML = ''; return; }
   const LABELS = { intro: 'Intro', recap: 'Recap', credits: 'Credits', ads: 'Ad' };
   const fmt = s => {
     const m = Math.floor(s / 60), sec = Math.round(s % 60);
@@ -870,8 +875,13 @@ function _renderTimingChips(status) {
            + `</span>`;
     }).join('');}
 
+/** Same shape TimingSkipper and the content script build their keys from. */
+function currentSeriesKey() {
+  return currentSeries?.title ? `${currentDomain}:${currentSeries.title}` : null;
+}
+
 function seriesSettings() {
-  const key = currentSeries ? `${currentDomain}:${currentSeries.title}` : null;
+  const key = currentSeriesKey();
   return (key && settings.series?.[key]) ? { ...SERIES_DEFAULTS, ...settings.series[key] } : { ...SERIES_DEFAULTS };
 }
 

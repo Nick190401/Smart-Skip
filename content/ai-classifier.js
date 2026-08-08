@@ -5,21 +5,32 @@
  * Returned types: 'intro' | 'recap' | 'credits' | 'ads' | 'next' | 'none'
  */
 
+// A label that names its own segment type can be cached forever — "Skip Intro"
+// means the same thing at 30 s and at 300 s. Anything else ("Überspringen",
+// "Skip", ">>") only got its type from surrounding context, and the context
+// changes: the very same node is relabelled from recap to intro when a recap
+// runs straight into the opening. Those results get a short TTL.
+const SS_SPECIFIC_LABEL_RE =
+  /intro|opening|vorspann|apertura|abertura|オープニング|오프닝|片头|recap|previously|wiederholung|zusammenfassung|rückblick|resumen|résumé|回顾|credits?|abspann|outro|ending|créditos|crédits|片尾|werbung|anzeige|advertisement|commercial|publicité|anuncio|\bads?\b|next\s*(?:episode|ep\b|up\b)|nächste\s*(?:folge|episode)|siguiente\s*episodio|prochain\s*épisode|下一集/i;
+
+const SS_AMBIGUOUS_TTL = 15000; // ms
+
 class AIClassifier {
   constructor() {
     this._session = null;       // Gemini Nano session (lazy)
     this._initPromise = null;   // ongoing init to deduplicate calls
-    this._cache = new Map();    // button fingerprint → type  (avoid re-asking AI)
+    this._cache = new Map();    // button fingerprint → { result, exp }
   }
 
   async classify(button) {
     const fp = this._fingerprint(button);
-    if (this._cache.has(fp)) return this._cache.get(fp);
+    const hit = this._cacheGet(fp);
+    if (hit) return hit;
 
     // Fast rule-based first pass
     const ruleResult = this._ruleClassify(button);
     if (ruleResult.type !== 'none' && ruleResult.confidence >= 0.85) {
-      this._cache.set(fp, ruleResult);
+      this._cacheSet(button, fp, ruleResult);
       return ruleResult;
     }
 
@@ -29,13 +40,13 @@ class AIClassifier {
         const aiResult = await this._aiClassify(button);
         if (aiResult.type !== 'none') {
           const merged = aiResult.confidence >= ruleResult.confidence ? aiResult : ruleResult;
-          this._cache.set(fp, merged);
+          this._cacheSet(button, fp, merged);
           return merged;
         }
       } catch (_) { /* fall through */ }
     }
 
-    this._cache.set(fp, ruleResult);
+    this._cacheSet(button, fp, ruleResult);
     return ruleResult;
   }
 
@@ -44,6 +55,37 @@ class AIClassifier {
   }
 
   clearCache() { this._cache.clear(); }
+
+  /**
+   * Drop every context-dependent verdict, keeping the self-describing ones.
+   * Called right after a skip, because crossing a segment boundary is exactly
+   * when a generic button's meaning changes.
+   */
+  evictAmbiguous() {
+    for (const [fp, entry] of this._cache) {
+      if (Number.isFinite(entry?.exp)) this._cache.delete(fp);
+    }
+  }
+
+  /** True when the button's own text says which segment it belongs to. */
+  _labelIsSpecific(el) {
+    if (!el) return false;
+    const uia = el.getAttribute?.('data-uia') || '';
+    if (/skip-intro|skip-recap|next-episode/.test(uia)) return true;
+    return SS_SPECIFIC_LABEL_RE.test(`${this._buttonText(el)} ${this._dataAttrSummary(el)}`);
+  }
+
+  _cacheGet(fp) {
+    const entry = this._cache.get(fp);
+    if (!entry) return null;
+    if (Date.now() > entry.exp) { this._cache.delete(fp); return null; }
+    return entry.result;
+  }
+
+  _cacheSet(el, fp, result) {
+    const exp = this._labelIsSpecific(el) ? Infinity : Date.now() + SS_AMBIGUOUS_TTL;
+    this._cache.set(fp, { result, exp });
+  }
 
   // Delegates to shared AI utility — cached 30 s internally.
   async _isAIAvailable() {
@@ -217,11 +259,12 @@ Category?`;
     const results = new Array(buttons.length).fill(null);
 
     // Fill from cache and run rule classifier for all
+    const fps     = buttons.map(b => this._fingerprint(b));
     const needsAI = [];
     for (let i = 0; i < buttons.length; i++) {
-      const fp = this._fingerprint(buttons[i]);
-      if (this._cache.has(fp)) {
-        results[i] = this._cache.get(fp);
+      const hit = this._cacheGet(fps[i]);
+      if (hit) {
+        results[i] = hit;
       } else {
         const rule = this._ruleClassify(buttons[i]);
         results[i] = rule;
@@ -231,9 +274,7 @@ Category?`;
 
     if (!needsAI.length || !(await this._isAIAvailable())) {
       for (let i = 0; i < buttons.length; i++) {
-        if (!this._cache.has(this._fingerprint(buttons[i]))) {
-          this._cache.set(this._fingerprint(buttons[i]), results[i]);
-        }
+        if (!this._cacheGet(fps[i])) this._cacheSet(buttons[i], fps[i], results[i]);
       }
       return results;
     }
@@ -257,13 +298,23 @@ Category?`;
       return `${idx}: text="${text}" aria="${aria}" data="${data}"`;
     }).join('\n');
 
+    // A skip we just performed is the strongest hint available for an unlabelled
+    // button: platforms run recap → intro back to back and reuse one overlay
+    // node for both, so "the segment we just left" tells the model what the
+    // identical-looking button in front of it now is.
+    const recentCtx = context.justSkipped
+      ? `\nThe viewer just skipped the ${context.justSkipped} seconds ago. A generic `
+        + `button appearing right after it is usually the NEXT segment `
+        + `(recap is commonly followed by intro), not another ${context.justSkipped}.`
+      : '';
+
     const prompt =
 `Streaming player. ${mediaCtx}. Video position: ${timeCtx}.
 Classify each UI button. For each output exactly one line: INDEX:CATEGORY:CONFIDENCE(0-100)
 Categories: intro recap credits ads next none
 Players keep some buttons mounted for the whole episode, so judge by what the
 button does, not by whether it is on screen. A button that starts the next
-episode is "next" even far from the end.
+episode is "next" even far from the end.${recentCtx}
 ${buttonLines}`;
 
     try {
@@ -282,7 +333,7 @@ ${buttonLines}`;
         const aiRes = { type, confidence: conf, source: 'ai-batch' };
         // Keep whichever is more confident
         results[origIdx] = conf >= (results[origIdx]?.confidence ?? 0) ? aiRes : results[origIdx];
-        this._cache.set(this._fingerprint(buttons[origIdx]), results[origIdx]);
+        this._cacheSet(buttons[origIdx], fps[origIdx], results[origIdx]);
       }
     } catch {
       // batch failed — no-op, rule results already in array
@@ -290,9 +341,7 @@ ${buttonLines}`;
 
     // Cache any that weren't covered by AI response
     for (let i = 0; i < buttons.length; i++) {
-      if (!this._cache.has(this._fingerprint(buttons[i]))) {
-        this._cache.set(this._fingerprint(buttons[i]), results[i]);
-      }
+      if (!this._cacheGet(fps[i])) this._cacheSet(buttons[i], fps[i], results[i]);
     }
     return results;
   }

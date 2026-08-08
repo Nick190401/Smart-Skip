@@ -231,7 +231,7 @@ Critical rules:
         // Only include overlay elements that are spatially near a video element.
         // This prevents sidebar/nav overlays (e.g. Twitch #side-nav) from polluting
         // the snapshot and misleading the AI into treating them as skip buttons.
-        const vid = document.querySelector('video');
+        const vid = ssMedia.activeVideo();
         if (vid) {
           const vr = vid.getBoundingClientRect();
           const er = el.getBoundingClientRect();
@@ -412,7 +412,7 @@ Critical rules:
       'aside, [role="complementary"], footer, [role="contentinfo"]'
     )) return false;
 
-    const vid = document.querySelector('video');
+    const vid = ssMedia.activeVideo();
     if (vid) {
       const vr = vid.getBoundingClientRect();
       const er = el.getBoundingClientRect();

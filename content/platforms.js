@@ -11,7 +11,9 @@ class BasePlatform {
   get href() { return window.location.href; }
 
   detect()       { return false; }
-  isWatchPage()  { return !!document.querySelector('video'); }
+  // A <video> tag alone is not a watch page — browse pages autoplay muted
+  // billboard previews. ssMedia gates on player size, duration and mute state.
+  isWatchPage()  { return ssMedia.isPlayerActive(); }
   extractMeta()  { return null; }
   getContainer() { return document.body; }
 
@@ -58,6 +60,35 @@ class BasePlatform {
   }
 
   /**
+   * Helper: "S02E04" (or "E004") from JSON-LD TVEpisode data, else null.
+   *
+   * Structured data survives player re-renders that make DOM selectors miss, so
+   * this is often the only way to get an episode code on platforms that never
+   * print one on screen. Without a code every observation is filed against the
+   * series bucket alone, and one episode watched three times looks exactly like
+   * three episodes agreeing.
+   */
+  metaEpisodeCode() {
+    for (const el of document.querySelectorAll('script[type="application/ld+json"]')) {
+      try {
+        const data  = JSON.parse(el.textContent);
+        const items = Array.isArray(data) ? data : [data];
+        for (const item of items) {
+          const epRaw = item.episodeNumber ?? item.episode?.episodeNumber;
+          const ep    = Number.parseInt(epRaw, 10);
+          if (!Number.isFinite(ep) || ep < 0) continue;
+          const seRaw = item.partOfSeason?.seasonNumber ?? item.seasonNumber;
+          const se    = Number.parseInt(seRaw, 10);
+          return Number.isFinite(se)
+            ? `S${String(se).padStart(2, '0')}E${String(ep).padStart(2, '0')}`
+            : `E${String(ep).padStart(3, '0')}`;
+        }
+      } catch {}
+    }
+    return null;
+  }
+
+  /**
    * Returns true when a string looks like an episode/segment title rather than a series title.
    * Used as a guard to prevent episode text being stored as the series name.
    */
@@ -87,7 +118,7 @@ class NetflixPlatform extends BasePlatform {
   detect() { return this.host.includes('netflix.com'); }
 
   isWatchPage() {
-    return this.href.includes('/watch/') || !!document.querySelector('video');
+    return this.href.includes('/watch/') || ssMedia.isPlayerActive();
   }
 
   extractMeta() {
@@ -154,7 +185,7 @@ class DisneyPlusPlatform extends BasePlatform {
   detect() { return this.host.includes('disneyplus.com') || this.host.includes('disney.com'); }
 
   isWatchPage() {
-    return this.href.includes('/video/') || !!document.querySelector('video');
+    return this.href.includes('/video/') || ssMedia.isPlayerActive();
   }
 
   extractMeta() {
@@ -209,7 +240,7 @@ class PrimeVideoPlatform extends BasePlatform {
       || (this.host.includes('amazon.') && this.path.includes('/gp/video'));
   }
 
-  isWatchPage() { return this.href.includes('/watch/') || !!document.querySelector('video'); }
+  isWatchPage() { return this.href.includes('/watch/') || ssMedia.isPlayerActive(); }
 
   extractMeta() {
     const title =
@@ -260,7 +291,7 @@ class CrunchyrollPlatform extends BasePlatform {
   isWatchPage() {
     return this.href.includes('/watch/')
       || this.host.includes('static.crunchyroll.com')
-      || !!document.querySelector('video');
+      || ssMedia.isPlayerActive();
   }
 
   extractMeta() {
@@ -374,7 +405,7 @@ class ParamountPlatform extends BasePlatform {
     return this.href.includes('/shows/')
       || this.href.includes('/movies/')
       || this.href.includes('/video/')
-      || !!document.querySelector('video');
+      || ssMedia.isPlayerActive();
   }
 
   extractMeta() {
@@ -466,7 +497,7 @@ class ParamountPlatform extends BasePlatform {
 class MaxPlatform extends BasePlatform {
   detect() { return this.host.includes('max.com') || this.host.includes('hbomax.com'); }
 
-  isWatchPage() { return this.href.includes('/video/') || !!document.querySelector('video'); }
+  isWatchPage() { return this.href.includes('/video/') || ssMedia.isPlayerActive(); }
 
   extractMeta() {
     const title = this.text(
@@ -483,7 +514,7 @@ class MaxPlatform extends BasePlatform {
 // Apple TV+
 class AppleTVPlatform extends BasePlatform {
   detect() { return this.host.includes('apple.com') || this.host.includes('tv.apple.com'); }
-  isWatchPage() { return !!document.querySelector('video'); }
+  isWatchPage() { return ssMedia.isPlayerActive(); }
 
   extractMeta() {
     const title = this.text('.product-header__title', 'h1') || this.meta('og:title');
@@ -496,7 +527,7 @@ class AppleTVPlatform extends BasePlatform {
 // Hulu
 class HuluPlatform extends BasePlatform {
   detect() { return this.host.includes('hulu.com'); }
-  isWatchPage() { return this.href.includes('/watch/') || !!document.querySelector('video'); }
+  isWatchPage() { return this.href.includes('/watch/') || ssMedia.isPlayerActive(); }
 
   extractMeta() {
     const title = this.text('[class*="TitleCard"]', '[class*="show-title"]', 'h1') || this.meta('og:title');
@@ -509,7 +540,7 @@ class HuluPlatform extends BasePlatform {
 // Viki
 class VikiPlatform extends BasePlatform {
   detect() { return this.host.includes('viki.com'); }
-  isWatchPage() { return this.href.includes('/videos/') || !!document.querySelector('video'); }
+  isWatchPage() { return this.href.includes('/videos/') || ssMedia.isPlayerActive(); }
 
   extractMeta() {
     const ogTitle = this.meta('og:title');
@@ -529,7 +560,7 @@ class GenericPlatform extends BasePlatform {
   detect() { return true; } // Always matches as final fallback
 
   isWatchPage() {
-    if (!document.querySelector('video')) return false;
+    if (!ssMedia.isPlayerActive()) return false;
     const skip = ['/browse', '/search', '/home', '/profile', '/settings'];
     return !skip.some(p => this.path.startsWith(p));
   }
@@ -544,7 +575,7 @@ class GenericPlatform extends BasePlatform {
   }
 
   getContainer() {
-    const video = document.querySelector('video');
+    const video = ssMedia.activeVideo();
     if (!video) return document.body;
     // Walk up to find a meaningful wrapper
     let node = video.parentElement;

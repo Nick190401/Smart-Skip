@@ -106,6 +106,7 @@
         "shared/ai-utils.js",
         "shared/i18n.js",
         "content/config.js",
+        "content/media-context.js",
         "content/platforms.js",
         "content/learning-store.js",
         "content/sync-service.js",

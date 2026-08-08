@@ -26,6 +26,25 @@ const BLOCKED_DOMAINS = new Set([
   'music.youtube.com',
 ]);
 
+/**
+ * How much each metadata source can be trusted, so a later detection pass can
+ * only ever improve what we know about the series — never replace it with a
+ * guess scraped off document.title.
+ *
+ *   4  the player's own DOM, or structured data the site publishes about itself
+ *   3  Gemini Nano reading the page
+ *   2  regex over the tab title
+ *   1  the tab title with the platform suffix stripped off
+ */
+const SS_META_QUALITY = {
+  netflix: 4, disneyplus: 4, prime: 4, crunchyroll: 4, paramount: 4,
+  max: 4, appletv: 4, hulu: 4, viki: 4, structured: 4,
+  'ai-scanner': 3, 'ai-title': 3,
+  generic: 2, 'title-fallback': 2,
+  'title-raw': 1,
+};
+const ssMetaQuality = (source) => SS_META_QUALITY[source] ?? 2;
+
 class SmartSkipV2 {
   constructor() {
     this.platform     = resolvePlatform();   // from platforms.js
@@ -43,7 +62,17 @@ class SmartSkipV2 {
     this._metaSlowRetry  = null;   // low-frequency background polling after burst ends
     this._metaRetryCount = 0;
     this._lastClickAt   = 0;
-    this._clickCooldown = 1200; // ms
+    this._clickCooldown = 700; // ms — long enough for the DOM to settle after a click
+
+    // Crossing one segment boundary is the best predictor that another is right
+    // behind it: a recap runs straight into the opening on most series. While a
+    // burst is active the scan budget drops from seconds to milliseconds.
+    this._burstUntil   = 0;
+    this._lastSkipType = null;
+    // element → { ts, type, videoTime }. Replaces a blanket cooldown that also
+    // blocked the *next* segment's button when the player reuses one node.
+    this._recentClicks   = new Map();
+    this._followUpTimers = new Set();
 
     // button texts confirmed by the AI on this domain (e.g. "Skip Intro")
     // filled from LearningStore on boot, updated when domScanner returns new results
@@ -129,25 +158,17 @@ class SmartSkipV2 {
       }
     }
 
-    // Watch for navigation (SPA support)
+    // Watch for navigation (SPA support) and for the episode changing underneath
+    // a URL that stays put.
     let lastHref = location.href;
     let lastDomain = location.hostname;
+    ssMedia.resetChangeBaseline();
     const navCheck = this._navCheck = setInterval(() => {
       // Stop silently if the extension was reloaded while this tab is open.
       if (!_ssContextValid()) { clearInterval(navCheck); return; }
       if (location.href !== lastHref) {
         lastHref = location.href;
-        if (typeof aiClassifier  !== 'undefined') aiClassifier.clearCache();
-        if (typeof domScanner    !== 'undefined') domScanner.invalidate();
-        if (typeof signalCollector !== 'undefined') signalCollector.disarm();
-        if (typeof timingSkipper !== 'undefined') timingSkipper.disarm();
-        this.currentSeries = null;
-        this._metaRetryCount = 0;
-        this._setupMetaObserver();
-        this._scheduleMeta(400);
-        this._startMetaRetry();
-        this._startPeriodicScan();
-        this._scheduleScan(600);
+        this._resetForNewMedia('navigation');
         if (location.hostname !== lastDomain) {  // domain changed — drop stale patterns
           lastDomain = location.hostname;
           this._learnedTextPatterns = [];
@@ -157,7 +178,13 @@ class SmartSkipV2 {
             }
           });
         }
+        return;
       }
+      // Autoplay on Prime, Disney+ and Crunchyroll loads the next episode into
+      // the same player without touching location.href. Everything keyed on the
+      // episode — timing windows, the episode settings row, what the popup shows
+      // — stayed pinned to the previous one for the rest of the session.
+      if (ssMedia.pollChange()) this._resetForNewMedia('media-change');
     }, 1000);
 
     // update HUD badge once we know whether Gemini Nano is ready
@@ -168,6 +195,36 @@ class SmartSkipV2 {
     }
 
     this._waitForVideo();
+  }
+
+  /**
+   * Different content is playing — either the page navigated or the player
+   * swapped the stream. Everything derived from the previous episode is now
+   * wrong, so it all goes: cached classifications, discovered selectors, armed
+   * timing windows and the detected series itself.
+   */
+  _resetForNewMedia(reason) {
+    ssMedia.invalidate();
+    ssMedia.resetChangeBaseline();
+    if (typeof aiClassifier    !== 'undefined') aiClassifier.clearCache();
+    if (typeof domScanner      !== 'undefined') domScanner.invalidate();
+    if (typeof signalCollector !== 'undefined') signalCollector.disarm();
+    if (typeof timingSkipper   !== 'undefined') timingSkipper.disarm();
+
+    this.currentSeries   = null;
+    this._metaRetryCount = 0;
+    this._burstUntil     = 0;
+    this._lastSkipType   = null;
+    this._recentClicks.clear();
+    for (const id of this._followUpTimers) clearTimeout(id);
+    this._followUpTimers.clear();
+
+    this._setupMetaObserver();
+    this._scheduleMeta(400);
+    this._startMetaRetry();
+    this._startPeriodicScan();
+    this._scheduleScan(600);
+    console.info(`[SmartSkip] new media (${reason}) — re-detecting series`);
   }
 
   /**
@@ -206,6 +263,10 @@ class SmartSkipV2 {
       try { this[o]?.disconnect(); } catch {}
       this[o] = null;
     }
+    for (const id of this._followUpTimers) clearTimeout(id);
+    this._followUpTimers.clear();
+    this._recentClicks.clear();
+    this._burstUntil = 0;
     try { timingSkipper.disarm(); }   catch {}
     try { signalCollector.disarm(); } catch {}
     try { this._hud?.remove(); } catch {}
@@ -294,6 +355,23 @@ class SmartSkipV2 {
     }
   }
 
+  /** Title comes from a source better than a tab-title guess. */
+  _metaTitleGood() {
+    const m = this.currentSeries;
+    return !!m?.title && ssMetaQuality(m.source) >= 3;
+  }
+
+  /** Title *and* episode known — nothing left for the retry ladder to find. */
+  _metaSettled() {
+    const m = this.currentSeries;
+    return this._metaTitleGood() && !!m.episode && m.episode !== 'unknown';
+  }
+
+  /** Compare two series titles ignoring case, punctuation and spacing. */
+  _normTitle(t) {
+    return (t || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  }
+
   // 1 s burst for up to 60 s, then falls back to slow background polling
   _startMetaRetry() {
     if (this._metaRetry) { clearInterval(this._metaRetry); this._metaRetry = null; }
@@ -302,10 +380,15 @@ class SmartSkipV2 {
     this._metaRetry = setInterval(() => {
       if (!_ssContextValid()) { clearInterval(this._metaRetry); this._metaRetry = null; return; }
       if (!this.platform.isWatchPage()) return;
-      if (this.currentSeries && this.currentSeries.source !== 'title-fallback'
-          && this.currentSeries.source !== 'title-raw') {
+      // A good title used to end the ladder on its own, which is why so many
+      // series ran the whole episode with episode 'unknown': the code often
+      // renders a few seconds after the show name. Keep looking for it — but
+      // only briefly, since movies will never have one.
+      if (this._metaSettled()
+          || (this._metaTitleGood() && this._metaRetryCount > 15)) {
         clearInterval(this._metaRetry);
         this._metaRetry = null;
+        if (!this._metaSettled()) this._startSlowMetaRetry();
         return;
       }
       this._metaRetryCount++;
@@ -332,11 +415,11 @@ class SmartSkipV2 {
     this._metaSlowRetry = setInterval(() => {
       const stop = () => { clearInterval(this._metaSlowRetry); this._metaSlowRetry = null; };
       if (!_ssContextValid()) return stop();
-      if (++ticks > 75) return stop();
-      if (this.currentSeries && this.currentSeries.source !== 'title-fallback'
-          && this.currentSeries.source !== 'title-raw') {
-        return stop();
-      }
+      // A page we still cannot name is worth the full ladder. One where only the
+      // episode code is missing usually never had one (a film, a special), so
+      // give it a couple of minutes rather than ten.
+      if (++ticks > (this._metaTitleGood() ? 20 : 75)) return stop();
+      if (this._metaSettled()) return stop();
       if (!this.platform.isWatchPage()) return;
       this._setupMetaObserver();
       this._updateMeta();
@@ -346,6 +429,20 @@ class SmartSkipV2 {
   _scheduleScan(delay = 150) {
     clearTimeout(this._scanDebounce);
     this._scanDebounce = setTimeout(() => this._scan(), delay);
+  }
+
+  /**
+   * Extra passes queued after a skip. They cannot go through _scheduleScan():
+   * it holds exactly one pending timer, so three calls would collapse into the
+   * last one — and the whole point is to look again several times while the
+   * player swaps in the next segment's button.
+   */
+  _scheduleFollowUpScan(delay) {
+    const id = setTimeout(() => {
+      this._followUpTimers.delete(id);
+      if (this.enabled) this._scan();
+    }, delay);
+    this._followUpTimers.add(id);
   }
 
   async _scan() {
@@ -362,7 +459,7 @@ class SmartSkipV2 {
       : null;
     let insidePredictedWindow = false;
     if (seriesKey) {
-      const video = document.querySelector('video');
+      const video = ssMedia.activeVideo();
       if (video && !isNaN(video.currentTime) && video.currentTime > 0) {
         const types = ['intro', 'recap', 'credits', 'ads', 'next'];
         const ctx   = { duration: video.duration };
@@ -382,8 +479,15 @@ class SmartSkipV2 {
     // on top. Unthrottled that is constant model load for hours of playback — and
     // the throttle used to apply only once a series had been detected, so the
     // pages that knew the least scanned the hardest.
+    //
+    // The flat 4 s budget was also what lost the intro after a recap: the button
+    // for the following segment is on screen within a second of the jump, and
+    // the next scan was still three seconds away. Right after a skip we spend
+    // the budget freely — that is the one moment we know something is coming.
+    const burst = Date.now() < this._burstUntil;
+    const budget = burst ? 500 : (insidePredictedWindow ? 1200 : 4000);
     const sinceLast = this._lastScanAt ? Date.now() - this._lastScanAt : Infinity;
-    if (sinceLast < (insidePredictedWindow ? 1200 : 4000)) return;
+    if (sinceLast < budget) return;
     this._lastScanAt = Date.now();
 
     this._scanPending = true;
@@ -425,9 +529,7 @@ class SmartSkipV2 {
       }
 
       // scanner found a title and we don't have one yet — grab it without waiting
-      if (scanResult?.title && (!this.currentSeries?.title
-          || this.currentSeries?.source === 'title-fallback'
-          || this.currentSeries?.source === 'title-raw')) {
+      if (scanResult?.title && !this._metaTitleGood()) {
         this._updateMeta();
       }
 
@@ -440,7 +542,7 @@ class SmartSkipV2 {
 
       // Gather all clickable buttons from both sources into one list, then
       // classify them in a single AI prompt (faster + context-aware).
-      const video = document.querySelector('video');
+      const video = ssMedia.activeVideo();
       const batchContext = {
         videoTime: video && !isNaN(video.currentTime) ? video.currentTime : null,
         // Position alone says nothing without the total — "1200s in" is the end
@@ -449,12 +551,21 @@ class SmartSkipV2 {
                      ? video.duration : null,
         series:    this.currentSeries?.title   || null,
         episode:   this.currentSeries?.episode || null,
+        // Only while the burst is live — an hour-old skip says nothing about
+        // what is on screen now.
+        justSkipped: burst ? this._lastSkipType : null,
       };
       const allButtons = [
         ...(scanResult?.skipButtons || []).filter(el => this._isClickable(el)),
         ...candidates.filter(el => this._isClickable(el)),
       ];
-      if (!allButtons.length) return;
+      if (!allButtons.length) {
+        // Nothing was on screen, so nothing was classified and no model time was
+        // spent. Charging the full budget for that turns a button that renders
+        // 200 ms late into a button we look at four seconds late.
+        this._lastScanAt = Date.now() - Math.max(0, budget - 800);
+        return;
+      }
 
       const batchResults = await aiClassifier.classifyBatch(allButtons, batchContext);
       for (let i = 0; i < allButtons.length; i++) {
@@ -467,12 +578,35 @@ class SmartSkipV2 {
         if (!result || result.type === 'none' || result.confidence < threshold) continue;
         if (!this._typeAllowed(result.type, seriesSettings)) continue;
         if (!this._positionAllows(result.type, video)) continue;
+        if (this._recentlyClicked(allButtons[i], result.type, video)) continue;
         this._click(allButtons[i], result);
         return;
       }
     } finally {
       this._scanPending = false;
     }
+  }
+
+  /**
+   * Have we already acted on this exact button for this exact segment?
+   *
+   * The old guard was a global 1.2 s cooldown, which is both too weak (a button
+   * that survives the click gets pressed again) and too strong (it blocks every
+   * other button on the page). Players routinely keep one overlay node and
+   * relabel it, so identity alone cannot decide: a second click is legitimate
+   * when the segment type changed, or when the playhead has clearly moved on to
+   * a new part of the episode.
+   */
+  _recentlyClicked(el, type, video) {
+    const prev = this._recentClicks.get(el);
+    if (!prev) return false;
+    if (Date.now() - prev.ts > 8000) { this._recentClicks.delete(el); return false; }
+    if (prev.type !== type) return false;               // relabelled — new segment
+    const t = video && Number.isFinite(video.currentTime) ? video.currentTime : null;
+    if (t !== null && prev.videoTime !== null && Math.abs(t - prev.videoTime) > 4) {
+      return false;                                     // the skip landed us elsewhere
+    }
+    return true;
   }
 
   _collectCandidates(container) {
@@ -527,8 +661,20 @@ class SmartSkipV2 {
     // 1. platform adapter
     let meta = this.platform.extractMeta();
 
+    // 1b. Structured page metadata (og:video:series, JSON-LD partOfSeries).
+    // Independent of DOM structure, so it still answers while the player is
+    // re-rendering and every adapter selector momentarily matches nothing.
+    if (!meta?.title) {
+      try {
+        const s = this.platform.metaSeriesTitle?.();
+        if (s && !this._isJunkTitle(s) && !this.platform._looksLikeEpisodeName?.(s)) {
+          meta = { title: s.trim(), episode: meta?.episode || 'unknown', source: 'structured' };
+        }
+      } catch (_) {}
+    }
+
     // 2. AI DOM scanner (result is cached, no re-prompt unless invalidated)
-    if (!meta || !meta.title || meta.source === 'title-fallback' || meta.source === 'title-raw') {
+    if (!meta?.title || ssMetaQuality(meta.source) < 3) {
       try {
         const scanResult = await domScanner.scan();
         if (scanResult?.title) {
@@ -581,8 +727,36 @@ class SmartSkipV2 {
 
     if (!meta || !meta.title) return;
 
-    const prevTitle   = this.currentSeries?.title;
-    const prevEpisode = this.currentSeries?.episode;
+    // 5. Episode code from structured data. Platforms that never print S/E on
+    // screen still ship it in JSON-LD, and without a code every observation is
+    // filed against the series bucket alone.
+    if (!meta.episode || meta.episode === 'unknown') {
+      try {
+        const code = this.platform.metaEpisodeCode?.();
+        if (code) meta = { ...meta, episode: code };
+      } catch (_) {}
+    }
+
+    const prev = this.currentSeries;
+    if (prev) {
+      // Never downgrade. _updateMeta runs on every DOM mutation near the title,
+      // and a player mid-re-render makes every adapter selector miss — the pass
+      // then falls all the way through to document.title and used to overwrite
+      // a confirmed series name with a stripped tab title. Re-detection after a
+      // real episode change goes through _resetForNewMedia(), which clears
+      // currentSeries first, so nothing here blocks it.
+      if (ssMetaQuality(meta.source) < ssMetaQuality(prev.source)) {
+        const sameShow = this._normTitle(prev.title) === this._normTitle(meta.title);
+        const addsEpisode = sameShow
+          && (!prev.episode || prev.episode === 'unknown')
+          && meta.episode && meta.episode !== 'unknown';
+        if (!addsEpisode) return;
+        meta = { ...prev, episode: meta.episode };
+      }
+    }
+
+    const prevTitle   = prev?.title;
+    const prevEpisode = prev?.episode;
 
     this.currentSeries = meta;
 
@@ -611,7 +785,7 @@ class SmartSkipV2 {
       // Gated by the feature_cloud_sync admin flag.
       if (this._remoteConfig?.feature_flags?.cloud_sync !== false) {
         syncService.fetchSelectors(location.hostname);
-        if (meta.source !== 'title-fallback' && meta.source !== 'title-raw') {
+        if (ssMetaQuality(meta.source) >= 3) {
           syncService.fetchTimings(this._seriesKey(meta.title));
           const epTimingKey = this._episodeKey(meta.title, meta.episode);
           if (epTimingKey) syncService.fetchTimings(epTimingKey);
@@ -637,7 +811,7 @@ class SmartSkipV2 {
           syncService.fetchTimings(tSeriesKey).catch(() => {});
         },
         onSkip: (win) => {
-          win._undoTime = document.querySelector('video')?.currentTime - 1;
+          win._undoTime = ssMedia.activeVideo()?.currentTime - 1;
           this._flashHUDTiming(win);
           this._sendMessage({
             action:     'buttonClicked',
@@ -651,7 +825,7 @@ class SmartSkipV2 {
           // driven by live evidence from this episode. Recording a jump that a
           // series prior triggered would let that prior cite itself as proof and
           // grow stronger with every episode it got wrong.
-          const vid = document.querySelector('video');
+          const vid = ssMedia.activeVideo();
           const t   = vid && win.local ? win.from + (win.to - win.from) / 2 : null;
           if (t !== null) {
             if (tEpKey)     learningStore.recordTiming(tEpKey,     win.type, t);
@@ -782,23 +956,64 @@ class SmartSkipV2 {
       'apple tv',
       'viki',
       'peacock',
+      'peacocktv',
       'funimation',
+      'joyn',
+      'sky',
+      'wow',
+      'rtl+',
+      'rtl plus',
+      'prosieben',
+      'zdf',
+      'zdfmediathek',
+      'ard',
+      'ardmediathek',
+      'vimeo',
+      'dailymotion',
     ]);
-    return JUNK.has(s);
+    if (JUNK.has(s)) return true;
+
+    // Shapes rather than names. Kept deliberately narrow: a pattern like
+    // /^max\b/ would reject "Max Payne", so brand names stay in the exact-match
+    // set above and only self-evidently non-series strings are matched here.
+    return /^(?:video|media)\s*player$|^untitled\b|^\d+$|^watch\s+(?:tv\s+shows?|movies)\b|watch\s+tv\s+shows\s+online/i.test(s);
   }
 
   //  Click
 
   _click(el, result) {
     this._lastClickAt = Date.now();
-    try { el.click(); } catch (_) {}
 
     const selector  = this._selectorOf(el);
-    const video     = document.querySelector('video');
+    const video     = ssMedia.activeVideo();
     const videoTime = video ? video.currentTime : null;
-    // If signal-collector tracked when this button appeared, use that as the
-    // segment start — it's when the intro began, not when we clicked.
+
+    // Read the segment start BEFORE clicking: the click makes the button vanish
+    // or get relabelled, and SignalCollector retires the registry entry that
+    // holds its appear time.
     const buttonFrom = signalCollector.getButtonAppearTime(el);
+
+    // Keyed by element, so stale entries pin removed DOM nodes in memory for as
+    // long as the tab lives. Prune on the way in.
+    for (const [node, rec] of this._recentClicks) {
+      if (Date.now() - rec.ts > 30_000 || !node.isConnected) this._recentClicks.delete(node);
+    }
+    this._recentClicks.set(el, { ts: Date.now(), type: result.type, videoTime });
+
+    try { el.click(); } catch (_) {}
+
+    // A recap ends where the intro begins. Scan hard for the next ~25 s, and
+    // throw away every verdict that was only true because of where we were in
+    // the episode — the overlay that said "Skip Recap" a moment ago is the same
+    // node that says "Skip Intro" now.
+    this._lastSkipType = result.type;
+    this._burstUntil   = Date.now() + 25_000;
+    try { aiClassifier.evictAmbiguous(); } catch (_) {}
+    for (const delay of [900, 1600, 2600]) this._scheduleFollowUpScan(delay);
+    setTimeout(() => { try { signalCollector.refreshButtons(); } catch (_) {} }, 600);
+
+    // buttonFrom (captured above) is when the button appeared — i.e. when the
+    // segment began, not when we clicked.
     const timingFrom = buttonFrom ?? videoTime;
     const seriesKey = this.currentSeries ? this._seriesKey(this.currentSeries.title) : null;
     // Episode key is more specific — record timing at both levels so predictions
@@ -889,7 +1104,7 @@ class SmartSkipV2 {
     const _duration    = video?.duration ?? null;  // capture before possible navigation
     setTimeout(() => {
       const btn         = _elRef.deref();
-      const vid         = document.querySelector('video');
+      const vid         = ssMedia.activeVideo();
       const tNow        = vid ? vid.currentTime : null;
       const btnGone     = !btn || !document.contains(btn)
                           || getComputedStyle(btn).display === 'none'
@@ -1346,7 +1561,7 @@ class SmartSkipV2 {
    * move would produce, so the skip button is visible when we scan for it.
    */
   _nudgePlayerControls() {
-    const video = document.querySelector('video');
+    const video = ssMedia.activeVideo();
     if (!video) return;
     const r = video.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) return;
@@ -1398,7 +1613,7 @@ class SmartSkipV2 {
     // Use a generous bottom margin because many platforms pin their skip bar
     // BELOW the video element (Paramount+, Peacock…) — the bar's top can be
     // several hundred pixels beneath vr.bottom while still being a player control.
-    const vid = document.querySelector('video');
+    const vid = ssMedia.activeVideo();
     if (vid) {
       const vr = vid.getBoundingClientRect();
       const hMargin = 200;   // left / right / above
@@ -1428,13 +1643,11 @@ class SmartSkipV2 {
     this._periodicScanInterval = setInterval(() => {
       if (!_ssContextValid()) { clearInterval(this._periodicScanInterval); this._periodicScanInterval = null; return; }
       if (!this.enabled) return;
-      const video = document.querySelector('video');
+      const video = ssMedia.activeVideo();
       // Only fire while there is a playing (or recently paused) video
       if (!video || video.paused || video.ended) return;
       // If series is still missing while the video is playing, nudge meta detection
-      if (!this.currentSeries || this.currentSeries.source === 'title-fallback' || this.currentSeries.source === 'title-raw') {
-        this._scheduleMeta(200);
-      }
+      if (!this._metaSettled()) this._scheduleMeta(200);
       this._scheduleScan(0); // immediate, no extra debounce delay
     }, 2000);
   }
@@ -1495,9 +1708,7 @@ class SmartSkipV2 {
       if (msg.action === 'fetchSeries') {
         // If we already have a good series title, return it immediately —
         // no need to re-run the expensive AI scan just to open the popup.
-        const alreadyGood = this.currentSeries?.title
-          && this.currentSeries.source !== 'title-fallback'
-          && this.currentSeries.source !== 'title-raw';
+        const alreadyGood = this._metaTitleGood();
 
         if (alreadyGood) {
           respond({ series: this.currentSeries, enabled: this.enabled });

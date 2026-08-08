@@ -83,7 +83,7 @@ class TimingSkipper {
     this._armedAt        = Date.now();
     this._lastPlayTime   = null;
 
-    const video = document.querySelector('video');
+    const video = ssMedia.activeVideo();
     if (!video) return;
     this._video = video;
 
@@ -122,6 +122,9 @@ class TimingSkipper {
   disarm() {
     this._armed = false;
     this._generation++; // invalidate in-flight loads
+    // Chips describe a player that is no longer there; the popup would keep
+    // showing them on whatever page you open next.
+    try { chrome.storage.local.remove('ss2_timing_status'); } catch {}
 
     this._detachListeners();
     if (this._windowRefreshTimer) { clearInterval(this._windowRefreshTimer); this._windowRefreshTimer = null; }
@@ -182,7 +185,7 @@ class TimingSkipper {
    * the playhead may have moved on — validate before jumping, or we rewind them.
    */
   confirmSkip(win) {
-    const video = this._video || document.querySelector('video');
+    const video = this._video || ssMedia.activeVideo();
     if (!video || !win) return false;
     const t = video.currentTime;
     if (t >= win.to - 1) return false;   // already past it — nothing to skip
@@ -198,7 +201,7 @@ class TimingSkipper {
 
   /** Undo our jump and penalise the window. No-op if the user has moved on. */
   undoSkip(win) {
-    const video = this._video || document.querySelector('video');
+    const video = this._video || ssMedia.activeVideo();
     if (!video || win?._undoTime == null) return false;
     const stillWhereWeLanded = Math.abs(video.currentTime - win.to) <= 30;
     if (stillWhereWeLanded) this._seekTo(video, win._undoTime);
@@ -1075,7 +1078,7 @@ class TimingSkipper {
 
     // verify the jump actually moved the video
     setTimeout(() => {
-      const vid = document.querySelector('video');
+      const vid = ssMedia.activeVideo();
       if (isNewEpisode(vid)) { this._pendingVerify = null; return; } // episode boundary
       const jumped = Math.abs(vid.currentTime - win.to) < 8;
       // Only a *live-evidence* skip counts as a positive training sample.
