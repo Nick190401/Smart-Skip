@@ -18,3 +18,5 @@ node_modules/
 # Website-Quellcode (separates Projekt, nicht im Extension-Repo)
 site/
 server/auth.php
+# Build output (extension package + store assets)
+dist/
