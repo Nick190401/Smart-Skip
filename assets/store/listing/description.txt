@@ -46,9 +46,9 @@ YOUR RULES, PER SERIES AND PER EPISODE
 • The toolbar icon counts what it skipped today
 
 
-WORKS ON
+WHERE IT RUNS
 
-Netflix, Prime Video, Disney+, Crunchyroll, Max, Paramount+, Hulu, Apple TV+, Peacock, Viki, Funimation, Wakanim, Joyn, Sky, RTL+, ProSieben, ZDF, ARD, Vimeo and Dailymotion.
+Smart Skip works on 20 streaming services: the large subscription platforms, the anime catalogues, the German free-to-air catch-up players and the general video hosts. Chrome shows you the exact list of sites it may run on when you install it, and it stays inactive everywhere else.
 
 
 PRIVACY
