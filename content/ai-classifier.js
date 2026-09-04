@@ -15,6 +15,11 @@ const SS_SPECIFIC_LABEL_RE =
 
 const SS_AMBIGUOUS_TTL = 15000; // ms
 
+// Bar the rule classifier must clear to act without asking the model. Same value
+// classify() already uses to short-circuit the AI, so the fast path is not a
+// weaker check — only an earlier one.
+const SS_FAST_MIN_CONFIDENCE = 0.85;
+
 class AIClassifier {
   constructor() {
     this._session = null;       // Gemini Nano session (lazy)
@@ -48,6 +53,35 @@ class AIClassifier {
 
     this._cacheSet(button, fp, ruleResult);
     return ruleResult;
+  }
+
+  /**
+   * Synchronous verdict, for the click-latency path. Returns a cached result or
+   * a rule hit that is self-describing enough to act on without the model, and
+   * null when only Gemini Nano could decide — the caller then falls back to the
+   * full asynchronous scan rather than guessing.
+   */
+  classifyFast(button) {
+    if (!button) return null;
+    const fp  = this._fingerprint(button);
+    const hit = this._cacheGet(fp);
+    if (hit) return hit;
+
+    const rule = this._ruleClassify(button);
+    if (rule.type === 'none' || rule.confidence < SS_FAST_MIN_CONFIDENCE) return null;
+    this._cacheSet(button, fp, rule);
+    return rule;
+  }
+
+  /**
+   * Does this exact button already carry a verdict? Lets the fast path act on
+   * anything the model has classified before, whatever language or wording it
+   * used — the keyword list only has to cover the very first sighting.
+   */
+  hasCachedVerdict(button) {
+    if (!button) return false;
+    const hit = this._cacheGet(this._fingerprint(button));
+    return !!hit && hit.type !== 'none' && hit.confidence >= SS_FAST_MIN_CONFIDENCE;
   }
 
   async aiStatus() {

@@ -45,6 +45,25 @@ const SS_META_QUALITY = {
 };
 const ssMetaQuality = (source) => SS_META_QUALITY[source] ?? 2;
 
+// Multilingual keyword scan — includes autoplay-countdown patterns
+// ("Continue watching", "Weiter", "Next Episode in 5", etc.). Shared by the
+// full scan and the fast path, so both look for exactly the same buttons.
+const SS_SKIP_WORDS = /skip|überspringen|\bweiter\b|continue\s*(?:watching|playing)?|keep\s+watching|jetzt\s*(?:ansehen|weitersehen)|intro\s*(?:skip)?|(?:next|nächste)\s*(?:episode|folge)|next\s*ep\b|recap|credits|abspann|vorspann|wiederholung|zusammenfassung|pular|saltar|ignorer|hoppa/i;
+
+// Fast path budget. The full scan is gated behind an AI DOM pass and a
+// multi-second budget; a plainly labelled "Skip Intro" should not wait for
+// either, so a cheap synchronous pass runs on every DOM change instead.
+const SS_FAST_SCAN_MIN_GAP  = 100;   // ms — floor between fast passes
+const SS_FAST_TICK_INTERVAL = 250;   // ms — catches reveals that mutate nothing
+
+// Duplicate-click guard. A button that is still there with the playhead where
+// we left it did not take the click, so a retry is worth it — but only a couple,
+// because a button that ignored three presses will ignore a fourth, and that is
+// precisely what a user sees as "it keeps hammering the same button".
+const SS_CLICK_GUARD_MS      = 8000;
+const SS_MAX_CLICK_ATTEMPTS  = 3;
+const SS_CLICK_KEY_TTL       = 60000;  // forget the button entirely after this
+
 class SmartSkipV2 {
   constructor() {
     this.platform     = resolvePlatform();   // from platforms.js
@@ -69,10 +88,20 @@ class SmartSkipV2 {
     // burst is active the scan budget drops from seconds to milliseconds.
     this._burstUntil   = 0;
     this._lastSkipType = null;
-    // element → { ts, type, videoTime }. Replaces a blanket cooldown that also
+    // click key → { ts, type, videoTime }. Replaces a blanket cooldown that also
     // blocked the *next* segment's button when the player reuses one node.
+    // Keyed by segment type + label rather than by the node, because players
+    // re-render the overlay between two scans and an element-keyed map then
+    // reports the replacement as never clicked.
     this._recentClicks   = new Map();
     this._followUpTimers = new Set();
+
+    // Fast path: synchronous, rule-only, no budget. Runs on every DOM change so
+    // a self-describing button is pressed in the same frame it appears.
+    this._fastScanQueued = false;
+    this._lastFastScanAt = 0;
+    this._fastTick       = null;
+    this._snoozeRefreshing = false;
 
     // button texts confirmed by the AI on this domain (e.g. "Skip Intro")
     // filled from LearningStore on boot, updated when domScanner returns new results
@@ -256,7 +285,7 @@ class SmartSkipV2 {
     for (const t of ['_scanDebounce', '_metaDebounce', '_hudHideTimer']) {
       clearTimeout(this[t]); this[t] = null;
     }
-    for (const t of ['_metaRetry', '_metaSlowRetry', '_periodicScanInterval', '_navCheck']) {
+    for (const t of ['_metaRetry', '_metaSlowRetry', '_periodicScanInterval', '_navCheck', '_fastTick']) {
       clearInterval(this[t]); this[t] = null;
     }
     for (const o of ['_domObserver', '_metaObserver', '_titleObserver', '_videoObserver']) {
@@ -313,7 +342,13 @@ class SmartSkipV2 {
         }
       }
 
-      if (needsScan) this._scheduleScan(80);
+      if (needsScan) {
+        // The 80 ms debounce is for the expensive pass. Looking at the button
+        // that just appeared costs a regex over the labels already in the DOM,
+        // so that happens on the next frame instead.
+        this._scheduleFastScan();
+        this._scheduleScan(80);
+      }
       if (needsMeta) this._scheduleMeta(300);
     });
 
@@ -443,6 +478,112 @@ class SmartSkipV2 {
       if (this.enabled) this._scan();
     }, delay);
     this._followUpTimers.add(id);
+  }
+
+  /** Coalesce every mutation in a frame into one fast pass. */
+  _scheduleFastScan() {
+    if (this._fastScanQueued || !this.enabled) return;
+    this._fastScanQueued = true;
+    const run = () => {
+      this._fastScanQueued = false;
+      try { this._fastScan(); } catch (_) {}
+    };
+    // rAF is throttled to nothing in a hidden tab; the periodic tick still needs
+    // to get through there, so fall back to a timer when the page is not visible.
+    if (typeof requestAnimationFrame === 'function' && document.visibilityState === 'visible') {
+      requestAnimationFrame(run);
+    } else {
+      setTimeout(run, 0);
+    }
+  }
+
+  /**
+   * Synchronous detection pass. No scan budget, no settle delay, no model
+   * round-trip — it acts on what is already known: a verdict Gemini Nano
+   * produced earlier, or a label that names its own segment. That is the case
+   * the slow pipeline was making the user wait several seconds for. Everything
+   * still unknown is left to _scan(), which can ask the model about it.
+   */
+  _fastScan() {
+    if (!this.enabled || !this.platform.isWatchPage()) return;
+    if (typeof aiClassifier === 'undefined') return;   // extension reloaded — globals gone
+    if (Date.now() - this._lastClickAt < this._clickCooldown) return;
+    if (Date.now() - this._lastFastScanAt < SS_FAST_SCAN_MIN_GAP) return;
+    this._lastFastScanAt = Date.now();
+
+    // Fail closed: without a fresh snooze answer we do not click at all.
+    if (!this._snoozeClearNow()) return;
+
+    if (!this.platform.getContainer()) return;   // no player on screen
+
+    const seriesSettings = this._currentSeriesSettings();
+    const video          = ssMedia.activeVideo();
+
+    for (const el of this._collectFastCandidates()) {
+      const result = aiClassifier.classifyFast(el);
+      if (!result) continue;
+      if (!this._typeAllowed(result.type, seriesSettings)) continue;
+      if (!this._positionAllows(result.type, video)) continue;
+      if (this._recentlyClicked(el, result.type, video)) continue;
+      this._click(el, result);
+      return;
+    }
+  }
+
+  /**
+   * Candidates for the fast path, in order of how much we actually know:
+   *
+   *   1. buttons the model has already classified on this page
+   *   2. text patterns the AI DOM scanner confirmed for this domain
+   *   3. the built-in keyword list
+   *
+   * Only (3) is fixed, and it exists purely for the first sighting on a page
+   * nothing has been learned about yet — everything the model works out
+   * afterwards widens the net past it. Anything none of the three recognise
+   * still reaches the model through the full _scan().
+   *
+   * Ordered cheap-test-first on purpose: _isClickable() forces layout per
+   * element, and this runs several times a second.
+   */
+  _collectFastCandidates() {
+    const learned = this._learnedTextPatterns.map(p => p.toLowerCase().trim()).filter(Boolean);
+    const hits = [];
+
+    for (const el of document.querySelectorAll('button, [role="button"], [data-t], [aria-label]')) {
+      const label = (el.getAttribute('aria-label') || '').trim();
+      const text  = (el.textContent || '').trim();
+      const known = SS_SKIP_WORDS.test(label) || SS_SKIP_WORDS.test(text)
+        || (learned.length && learned.some(pat => `${text} ${label}`.toLowerCase().includes(pat)))
+        || aiClassifier.hasCachedVerdict(el);
+      if (!known) continue;
+      if (this._isClickable(el)) hits.push(el);
+    }
+    return hits;
+  }
+
+  /**
+   * Snooze state for the synchronous path. Unknown or stale means "do not
+   * click": a user who muted us must not be overridden because a cache expired.
+   */
+  _snoozeClearNow() {
+    if (!this._snoozeCacheTs || Date.now() - this._snoozeCacheTs > 10000) {
+      this._refreshSnooze();
+      return false;
+    }
+    return !(this._snoozeUntil > Date.now());
+  }
+
+  _refreshSnooze() {
+    if (this._snoozeRefreshing) return;
+    this._snoozeRefreshing = true;
+    Promise.resolve()
+      .then(() => chrome.storage.local.get('ss2_snooze'))
+      .then(({ ss2_snooze }) => {
+        this._snoozeUntil   = ss2_snooze?.until ?? 0;
+        this._snoozeCacheTs = Date.now();
+      })
+      .catch(() => { /* context invalidated — stays fail-closed */ })
+      .finally(() => { this._snoozeRefreshing = false; });
   }
 
   async _scan() {
@@ -579,6 +720,10 @@ class SmartSkipV2 {
         if (!this._typeAllowed(result.type, seriesSettings)) continue;
         if (!this._positionAllows(result.type, video)) continue;
         if (this._recentlyClicked(allButtons[i], result.type, video)) continue;
+        // The AI round-trip above is long enough for the fast path to have
+        // clicked something in the meantime; without this the two paths press
+        // two different buttons back to back.
+        if (Date.now() - this._lastClickAt < this._clickCooldown) return;
         this._click(allButtons[i], result);
         return;
       }
@@ -598,15 +743,43 @@ class SmartSkipV2 {
    * a new part of the episode.
    */
   _recentlyClicked(el, type, video) {
-    const prev = this._recentClicks.get(el);
+    const key  = this._clickKey(el, type);
+    const prev = this._recentClicks.get(key);
     if (!prev) return false;
-    if (Date.now() - prev.ts > 8000) { this._recentClicks.delete(el); return false; }
-    if (prev.type !== type) return false;               // relabelled — new segment
+    const age = Date.now() - prev.ts;
+    if (age > SS_CLICK_KEY_TTL) { this._recentClicks.delete(key); return false; }
+
     const t = video && Number.isFinite(video.currentTime) ? video.currentTime : null;
-    if (t !== null && prev.videoTime !== null && Math.abs(t - prev.videoTime) > 4) {
-      return false;                                     // the skip landed us elsewhere
+    if (t !== null && prev.videoTime !== null) {
+      // Only a *seek* means the click worked. The old test compared raw
+      // positions against a 4 s tolerance, so four seconds of ordinary playback
+      // looked like a jump — which is exactly how a button that outlived its
+      // click got pressed again a few seconds later.
+      const played = video.paused ? 0 : (age / 1000) * (video.playbackRate || 1);
+      if (Math.abs((t - prev.videoTime) - played) > 2) {
+        this._recentClicks.delete(key);
+        return false;                                   // landed us elsewhere
+      }
     }
-    return true;
+
+    if (age <= SS_CLICK_GUARD_MS) return true;
+    // Still on screen, playhead never moved: the press did not take. Worth
+    // another go — but a bounded number of them.
+    return (prev.attempts || 1) >= SS_MAX_CLICK_ATTEMPTS;
+  }
+
+  /**
+   * Identity of "the button we just pressed". The node itself is not it: players
+   * re-render the overlay between two scans, and a fresh node with the same
+   * label is the same action, not a new one. Type is part of the key because a
+   * reused node genuinely does become a different button when it is relabelled.
+   */
+  _clickKey(el, type) {
+    const label = [
+      el?.getAttribute?.('aria-label') || '',
+      el?.textContent || '',
+    ].join(' ').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 60);
+    return `${type}|${label || this._selectorOf(el)}`;
   }
 
   _collectCandidates(container) {
@@ -627,14 +800,12 @@ class SmartSkipV2 {
       }
     }
 
-    // multilingual keyword scan — includes autoplay-countdown patterns
-    // ("Continue watching", "Weiter", "Next Episode in 5", etc.)
-    const SKIP_WORDS = /skip|überspringen|\bweiter\b|continue\s*(?:watching|playing)?|keep\s+watching|jetzt\s*(?:ansehen|weitersehen)|intro\s*(?:skip)?|(?:next|nächste)\s*(?:episode|folge)|next\s*ep\b|recap|credits|abspann|vorspann|wiederholung|zusammenfassung|pular|saltar|ignorer|hoppa/i;
+    // multilingual keyword scan — see SS_SKIP_WORDS
     for (const el of document.querySelectorAll('button, [role="button"], [data-t], [aria-label]')) {
       if (!this._isClickable(el)) continue;
       const label = (el.getAttribute('aria-label') || '').trim();
       const text  = (el.textContent || '').trim();
-      if (SKIP_WORDS.test(label) || SKIP_WORDS.test(text)) {
+      if (SS_SKIP_WORDS.test(label) || SS_SKIP_WORDS.test(text)) {
         if (!seen.has(el)) { seen.add(el); textHits.push(el); }
       }
     }
@@ -993,12 +1164,16 @@ class SmartSkipV2 {
     // holds its appear time.
     const buttonFrom = signalCollector.getButtonAppearTime(el);
 
-    // Keyed by element, so stale entries pin removed DOM nodes in memory for as
-    // long as the tab lives. Prune on the way in.
-    for (const [node, rec] of this._recentClicks) {
-      if (Date.now() - rec.ts > 30_000 || !node.isConnected) this._recentClicks.delete(node);
+    for (const [k, rec] of this._recentClicks) {
+      if (Date.now() - rec.ts > SS_CLICK_KEY_TTL) this._recentClicks.delete(k);
     }
-    this._recentClicks.set(el, { ts: Date.now(), type: result.type, videoTime });
+    const clickKey = this._clickKey(el, result.type);
+    this._recentClicks.set(clickKey, {
+      ts: Date.now(),
+      type: result.type,
+      videoTime,
+      attempts: (this._recentClicks.get(clickKey)?.attempts || 0) + 1,
+    });
 
     try { el.click(); } catch (_) {}
 
@@ -1650,12 +1825,28 @@ class SmartSkipV2 {
       if (!this._metaSettled()) this._scheduleMeta(200);
       this._scheduleScan(0); // immediate, no extra debounce delay
     }, 2000);
+
+    // Buttons revealed by a CSS transition or an opacity change on an ancestor
+    // produce no mutation this observer is watching for. The 2 s net used to be
+    // the only thing that caught them.
+    if (this._fastTick) clearInterval(this._fastTick);
+    this._fastTick = setInterval(() => {
+      if (!_ssContextValid()) { clearInterval(this._fastTick); this._fastTick = null; return; }
+      if (!this.enabled) return;
+      const v = ssMedia.activeVideo();
+      if (!v || v.paused || v.ended) return;
+      this._scheduleFastScan();
+    }, SS_FAST_TICK_INTERVAL);
   }
 
   _stopPeriodicScan() {
     if (this._periodicScanInterval) {
       clearInterval(this._periodicScanInterval);
       this._periodicScanInterval = null;
+    }
+    if (this._fastTick) {
+      clearInterval(this._fastTick);
+      this._fastTick = null;
     }
   }
 
