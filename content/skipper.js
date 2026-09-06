@@ -63,6 +63,9 @@ const SS_FAST_TICK_INTERVAL = 250;   // ms — catches reveals that mutate nothi
 const SS_CLICK_GUARD_MS      = 8000;
 const SS_MAX_CLICK_ATTEMPTS  = 3;
 const SS_CLICK_KEY_TTL       = 60000;  // forget the button entirely after this
+// A confirmed seek means the click landed. The overlay is still on screen for
+// a moment while it fades, and that moment must not read as "button ignored us".
+const SS_POST_SKIP_HOLD_MS   = 4000;
 
 class SmartSkipV2 {
   constructor() {
@@ -81,7 +84,8 @@ class SmartSkipV2 {
     this._metaSlowRetry  = null;   // low-frequency background polling after burst ends
     this._metaRetryCount = 0;
     this._lastClickAt   = 0;
-    this._clickCooldown = 700; // ms — long enough for the DOM to settle after a click
+    this._clickCooldown = 1500; // ms — the overlay fade-out outlives the click, and
+                                // scanning through it is what pressed the button twice
 
     // Crossing one segment boundary is the best predictor that another is right
     // behind it: a recap runs straight into the opening on most series. While a
@@ -757,6 +761,10 @@ class SmartSkipV2 {
       // click got pressed again a few seconds later.
       const played = video.paused ? 0 : (age / 1000) * (video.playbackRate || 1);
       if (Math.abs((t - prev.videoTime) - played) > 2) {
+        // The seek is proof the click landed. Hold the button off for a moment
+        // regardless of whether it is still painted — that lingering node is a
+        // fade-out, not a miss.
+        if (age <= SS_POST_SKIP_HOLD_MS) return true;
         this._recentClicks.delete(key);
         return false;                                   // landed us elsewhere
       }
@@ -1184,7 +1192,7 @@ class SmartSkipV2 {
     this._lastSkipType = result.type;
     this._burstUntil   = Date.now() + 25_000;
     try { aiClassifier.evictAmbiguous(); } catch (_) {}
-    for (const delay of [900, 1600, 2600]) this._scheduleFollowUpScan(delay);
+    for (const delay of [1700, 2600, 3600]) this._scheduleFollowUpScan(delay);
     setTimeout(() => { try { signalCollector.refreshButtons(); } catch (_) {} }, 600);
 
     // buttonFrom (captured above) is when the button appeared — i.e. when the
